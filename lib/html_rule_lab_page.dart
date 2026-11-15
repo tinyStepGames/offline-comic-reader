@@ -1,3 +1,4 @@
+import 'list_rule_lab_page.dart';
 import 'element_inspector_page.dart';
 import 'extraction_rule_transfer.dart';
 import 'package:dio/dio.dart';
@@ -98,6 +99,23 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
           '表示後DOMと選択設定を反映しました。\n'
           '「抽出テスト」で確認してください';
     });
+  }
+
+  Future<void> _openListRule() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ListRuleLabPage(
+          store: widget.store,
+          initialPage: _page,
+          initialUrl: _page?.uri.toString() ?? _url.text,
+          initialSelector: _selector.text,
+          initialAcquisition: _acquisition,
+        ),
+      ),
+    );
   }
 
   Future<void> _openTransfer() async {
@@ -313,6 +331,11 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _openListRule,
+                    icon: const Icon(Icons.view_list_outlined),
+                    label: const Text('一覧ルール'),
+                  ),
                   OutlinedButton.icon(
                     onPressed: _busy ? null : _openVisual,
                     icon: const Icon(Icons.ads_click),
