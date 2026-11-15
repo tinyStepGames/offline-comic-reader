@@ -19,6 +19,7 @@ class ChapterReaderPage extends StatefulWidget {
     required this.chapters,
     required this.initialIndex,
     this.onChapterOpened,
+    this.offlineOnly = false,
   }) : assert(chapters.length > 0),
        assert(initialIndex >= 0 && initialIndex < chapters.length);
 
@@ -26,6 +27,7 @@ class ChapterReaderPage extends StatefulWidget {
   final DownloadStore store;
   final List<ComicChapter> chapters;
   final int initialIndex;
+  final bool offlineOnly;
   final Future<void> Function(ComicChapter chapter)? onChapterOpened;
 
   @override
@@ -73,6 +75,10 @@ class _ChapterReaderPageState extends State<ChapterReaderPage> {
       List<Uri> images = [];
 
       if (files.isEmpty) {
+        if (widget.offlineOnly) {
+          throw StateError('保存ファイルが不足しています。保存済み一覧を更新してください。');
+        }
+
         final content = await widget.adapter.fetchContent(chapter);
         images = content.images;
 
@@ -120,9 +126,13 @@ class _ChapterReaderPageState extends State<ChapterReaderPage> {
     } catch (error) {
       if (!mounted) return;
 
+      final hint = widget.offlineOnly
+          ? '保存済み一覧からはオンライン取得を行いません。'
+          : '未保存の話にはネット接続が必要です。';
+
       final message =
           '「${chapter.title}」を開けませんでした。\n'
-          '未保存の話にはネット接続が必要です。\n$error';
+          '$hint\n$error';
 
       if (_opened) {
         // 現在の話は消さず、そのまま残す。

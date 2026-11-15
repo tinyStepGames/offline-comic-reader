@@ -1,3 +1,4 @@
+import 'saved_downloads_page.dart';
 import 'chapter_read_state_widgets.dart';
 import 'services/chapter_read_state_store.dart';
 import 'chapter_details.dart';
@@ -215,6 +216,7 @@ class _SourceHomeState extends State<SourceHome> {
     final title = switch (_section) {
       1 => 'お気に入り',
       2 => '閲覧履歴',
+      3 => '保存済み',
       _ => widget.adapter.name,
     };
 
@@ -287,6 +289,11 @@ class _SourceHomeState extends State<SourceHome> {
               history: true,
               onOpen: _openHistory,
             ),
+            SavedDownloadsPane(
+              adapter: widget.adapter,
+              store: widget.store,
+              active: _section == 3,
+            ),
           ],
         ),
         bottomNavigationBar: BottomNavigationBar(
@@ -306,6 +313,10 @@ class _SourceHomeState extends State<SourceHome> {
               label: 'お気に入り',
             ),
             BottomNavigationBarItem(icon: Icon(Icons.history), label: '履歴'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.download_done),
+              label: '保存済み',
+            ),
           ],
         ),
       ),
