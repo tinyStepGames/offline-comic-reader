@@ -520,7 +520,6 @@ class _ChapterListPageState extends State<ChapterListPage> {
 
     try {
       await _save(chapter);
-      _message('保存しました');
     } catch (error) {
       _message('保存に失敗しました。\n$error');
     } finally {
@@ -697,8 +696,18 @@ class _ChapterListPageState extends State<ChapterListPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // chapter-list-stable-layout-v1
   @override
   Widget build(BuildContext context) {
+    final textScaler = MediaQuery.textScalerOf(context);
+
+    // 文字サイズの設定に合わせて領域を確保し、
+    // 内容が変化しても高さが変わらないようにする。
+    final statusHeight = textScaler.scale(14) * 1.4 * 2 + 8;
+    final titleHeight = textScaler.scale(16) * 1.3 * 2;
+    final subtitleHeight = textScaler.scale(14) * 1.3;
+    final rowHeight = titleHeight + subtitleHeight + 24;
+
     return PopScope(
       canPop: !_locked,
       child: Scaffold(
@@ -719,84 +728,169 @@ class _ChapterListPageState extends State<ChapterListPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(_status),
-                  const SizedBox(height: 8),
-                  if (_batch)
-                    OutlinedButton.icon(
-                      onPressed: _stop
-                          ? null
-                          : () => setState(() => _stop = true),
-                      icon: const Icon(Icons.stop),
-                      label: Text(_stop ? '現在の話の処理後に停止します' : '一括保存を停止'),
-                    )
-                  else
-                    OutlinedButton.icon(
-                      onPressed: _locked || _chapters.isEmpty
-                          ? null
-                          : _downloadAll,
-                      icon: const Icon(Icons.download_for_offline),
-                      label: const Text('未保存チャプターを一括ダウンロード'),
+                  SizedBox(
+                    height: statusHeight,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Tooltip(
+                        message: _status,
+                        child: Text(
+                          _status,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, height: 1.4),
+                        ),
+                      ),
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: _batch
+                          ? (_stop ? null : () => setState(() => _stop = true))
+                          : (_locked || _chapters.isEmpty
+                                ? null
+                                : _downloadAll),
+                      icon: Icon(
+                        _batch ? Icons.stop : Icons.download_for_offline,
+                      ),
+                      label: Text(
+                        _batch
+                            ? (_stop ? '現在の話の処理後に停止します' : '一括保存を停止')
+                            : '未保存を一括ダウンロード',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            if (_locked) const LinearProgressIndicator(),
+
+            // バーを隠している間も、同じ高さを確保する。
+            SizedBox(
+              height: 4,
+              child: _locked
+                  ? const LinearProgressIndicator(minHeight: 4)
+                  : const SizedBox.expand(),
+            ),
+
             Expanded(
               child: ListView.builder(
+                key: PageStorageKey<String>(
+                  'chapters:${widget.adapter.id}:'
+                  '${widget.tab.id}:${widget.work.id}',
+                ),
+                itemExtent: rowHeight,
                 itemCount: _chapters.length,
                 itemBuilder: (context, index) {
                   final chapter = _chapters[index];
                   final saved = _saved.contains(chapter.id);
 
-                  return ListTile(
-                    title: Text(chapter.title),
-                    subtitle: Text(
-                      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
-                      style: TextStyle(
-                        color: saved ? Colors.tealAccent : Colors.white54,
-                      ),
-                    ),
-                    onTap: _locked ? null : () => _open(chapter),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (saved)
-                          const Padding(
-                            padding: EdgeInsets.all(12),
-                            child: Icon(
-                              Icons.offline_pin,
-                              color: Colors.tealAccent,
+                  return Material(
+                    key: ValueKey(chapter.id),
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _locked ? null : () => _open(chapter),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    height: titleHeight,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        chapter.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          height: 1.3,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    height: subtitleHeight,
+                                    child: Text(
+                                      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        height: 1.3,
+                                        color: saved
+                                            ? Colors.tealAccent
+                                            : Colors.white54,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          )
-                        else
-                          IconButton(
-                            tooltip: 'ダウンロード',
-                            onPressed: _locked
-                                ? null
-                                : () => _download(chapter),
-                            icon: const Icon(Icons.download),
-                          ),
-                        PopupMenuButton<String>(
-                          enabled: !_locked,
-                          onSelected: (value) {
-                            if (value == 'delete') {
-                              _delete(chapter);
-                            } else {
-                              _credits(chapter);
-                            }
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'credits',
-                              child: Text('クレジット'),
-                            ),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: Text('保存データを削除'),
+                            const SizedBox(width: 8),
+
+                            // 保存前後で、右側の領域を同じ幅・高さにする。
+                            SizedBox(
+                              width: 96,
+                              height: 48,
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      tooltip: saved ? '保存済み' : 'ダウンロード',
+                                      onPressed: saved || _locked
+                                          ? null
+                                          : () => _download(chapter),
+                                      icon: Icon(
+                                        saved
+                                            ? Icons.offline_pin
+                                            : Icons.download,
+                                        color: saved ? Colors.tealAccent : null,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: PopupMenuButton<String>(
+                                      enabled: !_locked,
+                                      onSelected: (value) {
+                                        if (value == 'delete') {
+                                          _delete(chapter);
+                                        } else {
+                                          _credits(chapter);
+                                        }
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'credits',
+                                          child: Text('クレジット'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: Text('保存データを削除'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-                      ],
+                      ),
                     ),
                   );
                 },
