@@ -1,3 +1,5 @@
+import 'chapter_read_state_widgets.dart';
+import 'services/chapter_read_state_store.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -95,6 +97,18 @@ class _ChapterReaderPageState extends State<ChapterReaderPage> {
       });
 
       try {
+        await ChapterReadStateStore.forRoot(
+          widget.store.root,
+        ).markOpened(chapter);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('読書状態を保存できませんでした：$error')));
+        }
+      }
+
+      try {
         await widget.onChapterOpened?.call(chapter);
       } catch (error) {
         if (mounted) {
@@ -168,6 +182,11 @@ class _ChapterReaderPageState extends State<ChapterReaderPage> {
             files: _files,
             imageUrls: _images,
             title: chapter.title,
+            chapterStateAction: ChapterReadStatus(
+              store: ChapterReadStateStore.forRoot(widget.store.root),
+              chapter: chapter,
+              button: true,
+            ),
             progressKey: ReadingKey(
               sourceId: chapter.progressSourceId,
               chapterId: chapter.progressChapterId,

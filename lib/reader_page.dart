@@ -18,6 +18,7 @@ class ReaderPage extends StatefulWidget {
     this.progressKey,
     this.onPreviousChapter,
     this.onNextChapter,
+    this.chapterStateAction,
   });
 
   final List<File> files;
@@ -26,6 +27,7 @@ class ReaderPage extends StatefulWidget {
   final ReadingKey? progressKey;
   final VoidCallback? onPreviousChapter;
   final VoidCallback? onNextChapter;
+  final Widget? chapterStateAction;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -433,6 +435,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                                 ),
                               ),
                             ),
+                            if (widget.chapterStateAction != null)
+                              widget.chapterStateAction!,
                             IconButton(
                               tooltip: '操作部分を隠す',
                               onPressed: () {

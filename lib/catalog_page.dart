@@ -1,3 +1,5 @@
+import 'chapter_read_state_widgets.dart';
+import 'services/chapter_read_state_store.dart';
 import 'chapter_details.dart';
 import 'chapter_order.dart';
 import 'favorite_updates_page.dart';
@@ -479,6 +481,35 @@ class ChapterListPage extends StatefulWidget {
 }
 
 class _ChapterListPageState extends State<ChapterListPage> {
+  ChapterReadStateStore get _readStates =>
+      ChapterReadStateStore.forRoot(widget.store.root);
+
+  Future<void> _changeReadState(
+    ComicChapter chapter,
+    ChapterReadState next,
+  ) async {
+    if (_locked) return;
+    setState(() => _busy = true);
+
+    try {
+      await _readStates.setChapterState(chapter, next);
+
+      if (mounted) {
+        setState(() {
+          _status = next == ChapterReadState.completed
+              ? '読了にしました：${chapter.title}'
+              : '未読に戻しました：${chapter.title}';
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '読書状態を保存できませんでした。\n$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String? _lastOpenedChapterId;
   bool _readingEntryReady = false;
   String? _readingEntryError;
@@ -598,6 +629,8 @@ class _ChapterListPageState extends State<ChapterListPage> {
     double dateHeight,
   ) {
     final previous = chapter.id == _lastOpenedChapterId;
+    final readStateHeight =
+        (MediaQuery.textScalerOf(context).scale(12) * 1.4).ceilToDouble() + 4;
 
     final status = [
       saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
@@ -638,6 +671,10 @@ class _ChapterListPageState extends State<ChapterListPage> {
               ),
             ),
           ),
+        ),
+        SizedBox(
+          height: readStateHeight,
+          child: ChapterReadStatus(store: _readStates, chapter: chapter),
         ),
         SizedBox(
           height: dateHeight,
@@ -1069,8 +1106,12 @@ class _ChapterListPageState extends State<ChapterListPage> {
     final subtitleHeight = textScaler.scale(14) * 1.3;
     final dateHeight = (textScaler.scale(12) * 1.4).ceilToDouble() + 4;
 
+    final readStateHeight = (textScaler.scale(12) * 1.4).ceilToDouble() + 4;
+
     final rowHeight =
-        (titleHeight + subtitleHeight + dateHeight + 24).ceilToDouble() + 8;
+        (titleHeight + subtitleHeight + readStateHeight + dateHeight + 24)
+            .ceilToDouble() +
+        8;
 
     return PopScope(
       canPop: !_locked,
@@ -1233,13 +1274,31 @@ class _ChapterListPageState extends State<ChapterListPage> {
                                     child: PopupMenuButton<String>(
                                       enabled: !_locked,
                                       onSelected: (value) {
-                                        if (value == 'delete') {
+                                        if (value == 'complete') {
+                                          _changeReadState(
+                                            chapter,
+                                            ChapterReadState.completed,
+                                          );
+                                        } else if (value == 'unread') {
+                                          _changeReadState(
+                                            chapter,
+                                            ChapterReadState.unread,
+                                          );
+                                        } else if (value == 'delete') {
                                           _delete(chapter);
                                         } else {
                                           _credits(chapter);
                                         }
                                       },
                                       itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'complete',
+                                          child: Text('読了にする'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'unread',
+                                          child: Text('未読に戻す'),
+                                        ),
                                         PopupMenuItem(
                                           value: 'credits',
                                           child: Text('クレジット'),
