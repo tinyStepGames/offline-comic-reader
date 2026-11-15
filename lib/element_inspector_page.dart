@@ -33,6 +33,30 @@ const _pickerScript = r'''
   let sequence = 0;
   let snapshot = null;
   let marked = [];
+  let scopeSelector = '';
+  let fieldKey = '';
+
+  const scopeGroups = () => scopeSelector
+    ? [...document.querySelectorAll(scopeSelector)]
+    : [];
+
+  const scopedNodes = selector => {
+    if (!scopeSelector) return [...document.querySelectorAll(selector)];
+    const result = [];
+    for (const group of scopeGroups()) {
+      if (!selector) result.push(group);
+      else result.push(...group.querySelectorAll(selector));
+    }
+    return [...new Set(result)];
+  };
+
+  const scopeOf = el => {
+    if (!scopeSelector) return null;
+    for (let node = el; node; node = node.parentElement) {
+      if (node.matches(scopeSelector)) return node;
+    }
+    return null;
+  };
 
   const restore = () => {
     for (const item of marked) {
@@ -74,10 +98,25 @@ const _pickerScript = r'''
     return parts.join(' > ');
   };
 
+  const relativePath = (el, root) => {
+    const parts = [];
+    for (let node = el; node && node !== root; node = node.parentElement) {
+      let part = node.tagName.toLowerCase();
+      const siblings = [...node.parentElement.children].filter(
+        item => item.tagName === node.tagName
+      );
+      if (siblings.length > 1) {
+        part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+      }
+      parts.unshift(part);
+    }
+    return parts.join(' > ');
+  };
+
   const highlight = selector => {
     restore();
     let nodes;
-    try { nodes = [...document.querySelectorAll(selector)]; }
+    try { nodes = scopedNodes(selector); }
     catch (_) { return; }
 
     for (const el of nodes.slice(0, 100)) {
@@ -92,21 +131,37 @@ const _pickerScript = r'''
   };
 
   const describe = el => {
+    const root = scopeSelector ? scopeOf(el) : null;
+    if (scopeSelector && !root) return;
+
     restore();
     selected = el;
     const candidates = [];
-    const proposals = [simple(el)];
+    let proposals;
 
-    if (el.parentElement) {
-      proposals.push(simple(el.parentElement) + ' > ' + simple(el));
+    if (scopeSelector) {
+      if (el === root) {
+        proposals = [''];
+      } else {
+        proposals = [simple(el)];
+        if (el.parentElement && el.parentElement !== root) {
+          proposals.push(simple(el.parentElement) + ' > ' + simple(el));
+        }
+        proposals.push(relativePath(el, root));
+      }
+    } else {
+      proposals = [simple(el)];
+      if (el.parentElement) {
+        proposals.push(simple(el.parentElement) + ' > ' + simple(el));
+      }
+      proposals.push(path(el));
     }
-    proposals.push(path(el));
 
     for (const selector of [...new Set(proposals)]) {
       try {
         candidates.push({
           selector,
-          count: document.querySelectorAll(selector).length
+          count: scopedNodes(selector).length
         });
       } catch (_) {}
     }
@@ -121,6 +176,7 @@ const _pickerScript = r'''
     snapshot = {
       sequence: ++sequence,
       tag: el.tagName.toLowerCase(),
+      text: (el.textContent || '').trim().slice(0, 1000),
       html: el.outerHTML.slice(0, 6000),
       attrs,
       candidates
@@ -137,6 +193,22 @@ const _pickerScript = r'''
   }, true);
 
   window.__ocrPicker = {
+    configureScope(selector, key) {
+      restore();
+      scopeSelector = selector || '';
+      fieldKey = key || '';
+      selected = null;
+      snapshot = null;
+
+      if (scopeSelector) {
+        const groups = scopeGroups();
+        if (!groups.length) {
+          throw new Error('まとまりが見つかりません。URLとセレクターを確認してください');
+        }
+        highlight('');
+        groups[0].scrollIntoView({block: 'center'});
+      }
+    },
     enable(value) {
       enabled = !!value;
       if (!enabled) restore();
@@ -160,9 +232,16 @@ const _pickerScript = r'''
 ''';
 
 class ElementInspectorPage extends StatefulWidget {
-  const ElementInspectorPage({super.key, required this.url});
+  const ElementInspectorPage({
+    super.key,
+    required this.url,
+    this.groupSelector = '',
+    this.fieldKey = '',
+  });
 
   final String url;
+  final String groupSelector;
+  final String fieldKey;
 
   @override
   State<ElementInspectorPage> createState() => _ElementInspectorPageState();
@@ -274,7 +353,28 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
             : attrs.containsKey('data-src')
             ? 'data-src'
             : 'text';
-        _status = '選択：${data['tag']}／青枠は同じ条件に一致する要素';
+        if (widget.groupSelector.isNotEmpty) {
+          if (widget.fieldKey == 'title' ||
+              widget.fieldKey == 'date' ||
+              widget.fieldKey == 'latestChapter') {
+            _value = 'text';
+          } else if (widget.fieldKey == 'url') {
+            _value = 'href';
+          } else if (widget.fieldKey == 'id') {
+            _value = 'id';
+          } else if (widget.fieldKey == 'thumbnail') {
+            _value = attrs.containsKey('data-src')
+                ? 'data-src'
+                : attrs.containsKey('src')
+                ? 'src'
+                : attrs.containsKey('style')
+                ? 'style'
+                : 'src';
+          }
+        }
+        _status = widget.groupSelector.isEmpty
+            ? '選択：${data['tag']}／青枠は同じ条件に一致する要素'
+            : '選択：${data['tag']}／まとまりの内側だけを対象にしています';
       });
     } catch (_) {
       // 読み込み途中やページ遷移中は、次回の選択で取り直す。
@@ -313,7 +413,12 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
   }
 
   Future<void> _use() async {
-    if (!_ready || _selector.isEmpty || _capturing) return;
+    if (!_ready || _capturing || _selected == null) return;
+    if (widget.groupSelector.isEmpty && _selector.isEmpty) return;
+    if (widget.groupSelector.isNotEmpty && _value == 'innerHtml') {
+      setState(() => _status = '一覧の項目には文字列または属性を選んでください');
+      return;
+    }
     setState(() => _capturing = true);
 
     try {
@@ -407,7 +512,11 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
           for (final candidate in candidates)
             RadioListTile<String>(
               contentPadding: EdgeInsets.zero,
-              title: Text(candidate['selector'] as String),
+              title: Text(
+                (candidate['selector'] as String).isEmpty
+                    ? '要素自身（まとまりそのもの）'
+                    : candidate['selector'] as String,
+              ),
               subtitle: Text(
                 '${candidate['count']}件に一致'
                 '${(candidate['selector'] as String).contains('nth-of-type') ? '／位置依存のため変更に弱い候補' : ''}',
@@ -445,7 +554,8 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
               DropdownMenuItem(value: 'href', child: Text('href：リンク')),
               DropdownMenuItem(value: 'src', child: Text('src：画像等')),
               DropdownMenuItem(value: 'data-src', child: Text('data-src')),
-              DropdownMenuItem(value: 'style', child: Text('style')),
+              DropdownMenuItem(value: 'style', child: Text('style：背景画像など')),
+              DropdownMenuItem(value: 'id', child: Text('id')),
             ],
             onChanged: (value) {
               if (value != null) setState(() => _value = value);
@@ -457,6 +567,17 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
             child: Text(_capturing ? '反映中…' : 'この設定を使う'),
           ),
           const SizedBox(height: 12),
+          const Text('文字列プレビュー'),
+          SelectableText(selected['text'] as String? ?? ''),
+          const SizedBox(height: 12),
+          if (widget.fieldKey == 'thumbnail' && _value == 'style')
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                '表紙に反映すると、style 内の最初の url(...) を取得します。',
+                style: TextStyle(color: Colors.tealAccent),
+              ),
+            ),
           const Text('主な属性'),
           SelectableText(const JsonEncoder.withIndent('  ').convert(attrs)),
           const SizedBox(height: 12),
@@ -564,6 +685,12 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
                         source: _pickerScript,
                       );
                       await controller.evaluateJavascript(
+                        source:
+                            'window.__ocrPicker.configureScope('
+                            '${jsonEncode(widget.groupSelector)},'
+                            '${jsonEncode(widget.fieldKey)})',
+                      );
+                      await controller.evaluateJavascript(
                         source: 'window.__ocrPicker.enable($_selecting)',
                       );
 
@@ -571,7 +698,9 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
                         setState(() {
                           _ready = true;
                           _status = _selecting
-                              ? '調べたい部分をタップ／クリックしてください'
+                              ? widget.groupSelector.isEmpty
+                                    ? '調べたい部分をタップ／クリックしてください'
+                                    : '青枠のまとまりの中から、この項目に使う部分を選んでください'
                               : '通常操作モードです';
                         });
                       }

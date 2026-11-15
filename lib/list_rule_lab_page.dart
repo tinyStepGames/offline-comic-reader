@@ -7,6 +7,7 @@ import 'element_inspector_page.dart';
 import 'services/download_store.dart';
 import 'services/html_probe.dart';
 import 'services/list_extraction_rule.dart';
+import 'services/list_field_pick.dart';
 
 class ListRuleLabPage extends StatefulWidget {
   const ListRuleLabPage({
@@ -117,16 +118,77 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     });
   }
 
-  void _test() {
+  Future<void> _pickField(String key) async {
+    if (_busy) return;
     FocusScope.of(context).unfocus();
 
     try {
-      final page = _page;
-      if (page == null) {
-        throw StateError('HTML取得またはページから選択してください');
+      htmlProbeUri(_url.text);
+      final group = _group.text.trim();
+      if (group.isEmpty) {
+        throw StateError('先に「1件分のまとまり」を指定してください');
       }
 
-      final report = extractListRows(page, _rule());
+      final pick = await Navigator.of(context).push<VisualPick>(
+        MaterialPageRoute<VisualPick>(
+          builder: (_) => ElementInspectorPage(
+            url: _url.text.trim(),
+            groupSelector: group,
+            fieldKey: key,
+          ),
+        ),
+      );
+
+      if (!mounted || pick == null) return;
+
+      final next = listFieldFromPick(
+        key: key,
+        selector: pick.selector,
+        mode: pick.mode,
+        attribute: pick.attribute,
+      );
+
+      setState(() {
+        _page = pick.page;
+        _url.text = pick.page.uri.toString();
+        _acquisition = 'renderedDom';
+        _fields[key] = next.copyWith(
+          pattern: _fields[key]!.pattern,
+          replacement: _fields[key]!.replacement,
+        );
+        _revision++;
+        _report = null;
+        _status =
+            '${listFieldLabels[key]}だけに選択結果を反映しました。'
+            '「一覧としてテスト」で他のまとまりも確認してください';
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '項目を選択できませんでした：$error');
+      }
+    }
+  }
+
+  Future<void> _test() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+    final page = _page;
+
+    if (page == null) {
+      setState(() => _status = 'HTML取得またはページから選択してください');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _report = null;
+      _status = '一覧をテスト中';
+    });
+
+    try {
+      final report = await extractListRowsSafely(page, _rule());
+      if (!mounted) return;
+
       setState(() {
         _report = report;
         _status =
@@ -135,10 +197,14 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             '取得元：$_acquisition';
       });
     } catch (error) {
-      setState(() {
-        _report = null;
-        _status = 'テストできませんでした：$error';
-      });
+      if (mounted) {
+        setState(() {
+          _report = null;
+          _status = 'テストできませんでした：$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -266,6 +332,15 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       ),
       childrenPadding: const EdgeInsets.all(12),
       children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _busy ? null : () => _pickField(key),
+            icon: const Icon(Icons.ads_click),
+            label: Text('$labelをまとまりから選ぶ'),
+          ),
+        ),
+        const SizedBox(height: 12),
         if (!requiredField)
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -287,6 +362,38 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             ),
             onChanged: (value) =>
                 update(_fields[key]!.copyWith(selector: value)),
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            initialValue: rule.pattern,
+            enabled: !_busy,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(
+              labelText: '正規表現（任意）',
+              hintText: r'(\d+(?:\.\d+)?)',
+              helperText: '空欄なら取得値をそのまま使用。最初の一致を使います。',
+              helperMaxLines: 3,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) =>
+                update(_fields[key]!.copyWith(pattern: value)),
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            initialValue: rule.replacement,
+            enabled: !_busy,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: const InputDecoration(
+              labelText: '整形テンプレート',
+              hintText: r'最新第$1話',
+              helperText: r'$1・$2＝括弧の内容、$0＝一致全体、$$＝ドル記号。',
+              helperMaxLines: 3,
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) =>
+                update(_fields[key]!.copyWith(replacement: value)),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<ListValueMode>(
@@ -532,7 +639,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             const Text(
               '下書きは端末内に1件保存します。復元は明示操作です。\n'
               '現段階は編集・検証用です。サイト登録や読書機能にはまだ接続しません。\n'
-              '要素選択は現在、まとまりの指定用です。各項目の内側セレクターは入力します。',
+              '各項目の「まとまりから選ぶ」で内側を選択できます。セレクターの手入力も可能です。',
               style: TextStyle(color: Colors.white54, fontSize: 12),
             ),
           ],

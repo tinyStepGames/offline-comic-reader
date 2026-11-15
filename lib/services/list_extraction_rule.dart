@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html;
 
 import 'html_probe.dart';
+import 'list_text_transform.dart';
 
 enum ListValueMode { text, attribute, cssUrl }
 
@@ -13,6 +16,7 @@ const listFieldLabels = <String, String>{
   'thumbnail': '表紙',
   'id': 'ID',
   'date': '公開日など',
+  'latestChapter': '最新話・話数',
 };
 
 class ListFieldRule {
@@ -21,23 +25,31 @@ class ListFieldRule {
     this.mode = ListValueMode.text,
     this.attribute = '',
     this.enabled = true,
+    this.pattern = '',
+    this.replacement = '',
   });
 
   final String selector;
   final ListValueMode mode;
   final String attribute;
   final bool enabled;
+  final String pattern;
+  final String replacement;
 
   ListFieldRule copyWith({
     String? selector,
     ListValueMode? mode,
     String? attribute,
     bool? enabled,
+    String? pattern,
+    String? replacement,
   }) => ListFieldRule(
     selector: selector ?? this.selector,
     mode: mode ?? this.mode,
     attribute: attribute ?? this.attribute,
     enabled: enabled ?? this.enabled,
+    pattern: pattern ?? this.pattern,
+    replacement: replacement ?? this.replacement,
   );
 
   Map<String, dynamic> toJson() => {
@@ -45,12 +57,20 @@ class ListFieldRule {
     'mode': mode.name,
     'attribute': attribute,
     'enabled': enabled,
+    if (pattern.isNotEmpty) 'pattern': pattern,
+    if (replacement.isNotEmpty) 'replacement': replacement,
   };
 
   factory ListFieldRule.fromJson(Map<String, dynamic> data) {
     if (data.keys.any(
-      (key) =>
-          !const {'selector', 'mode', 'attribute', 'enabled'}.contains(key),
+      (key) => !const {
+        'selector',
+        'mode',
+        'attribute',
+        'enabled',
+        'pattern',
+        'replacement',
+      }.contains(key),
     )) {
       throw const FormatException('未対応の項目設定です');
     }
@@ -68,6 +88,8 @@ class ListFieldRule {
       mode: mode.single,
       attribute: data['attribute'] as String,
       enabled: data['enabled'] as bool,
+      pattern: data['pattern'] as String? ?? '',
+      replacement: data['replacement'] as String? ?? '',
     );
   }
 }
@@ -86,6 +108,7 @@ Map<String, ListFieldRule> defaultListFields() => {
     enabled: false,
   ),
   'date': const ListFieldRule(enabled: false),
+  'latestChapter': const ListFieldRule(enabled: false),
 };
 
 class ListExtractionRule {
@@ -97,7 +120,7 @@ class ListExtractionRule {
     this.acquisition = 'staticHtml',
   });
 
-  static const qrPrefix = 'ocr-list:1:';
+  static const qrPrefix = 'ocr-list:2:';
 
   final String pageUrl;
   final String groupSelector;
@@ -131,6 +154,7 @@ class ListExtractionRule {
     }
 
     for (final field in fields.values) {
+      validateListTransform(field.pattern, field.replacement);
       if (field.selector.length > 2048 || field.attribute.length > 128) {
         throw const FormatException('項目設定が長すぎます');
       }
@@ -145,7 +169,7 @@ class ListExtractionRule {
 
   Map<String, dynamic> toJson() => {
     'format': 'offline-comic-reader.list-extraction',
-    'version': 1,
+    'version': 2,
     'pageUrl': pageUrl,
     'kind': kind,
     'acquisition': acquisition,
@@ -176,9 +200,15 @@ class ListExtractionRule {
       throw const FormatException('設定が大きすぎます');
     }
 
-    if (value.startsWith(qrPrefix)) {
+    final prefix = value.startsWith(qrPrefix)
+        ? qrPrefix
+        : value.startsWith('ocr-list:1:')
+        ? 'ocr-list:1:'
+        : null;
+
+    if (prefix != null) {
       value = utf8.decode(
-        base64Url.decode(base64Url.normalize(value.substring(qrPrefix.length))),
+        base64Url.decode(base64Url.normalize(value.substring(prefix.length))),
       );
     }
 
@@ -189,7 +219,7 @@ class ListExtractionRule {
     final data = Map<String, dynamic>.from(jsonDecode(value) as Map);
 
     if (data['format'] != 'offline-comic-reader.list-extraction' ||
-        data['version'] != 1 ||
+        !const [1, 2].contains(data['version']) ||
         data.keys.any(
           (key) => !const {
             'format',
@@ -205,6 +235,14 @@ class ListExtractionRule {
     }
 
     final rawFields = Map<String, dynamic>.from(data['fields'] as Map);
+
+    // 旧形式に存在しなかった項目だけを補う。
+    if (data['version'] == 1) {
+      rawFields.putIfAbsent(
+        'latestChapter',
+        () => const ListFieldRule(enabled: false).toJson(),
+      );
+    }
     final rule = ListExtractionRule(
       pageUrl: data['pageUrl'] as String,
       groupSelector: data['groupSelector'] as String,
@@ -307,6 +345,11 @@ ListExtractionReport extractListRows(
         }
 
         value = value.trim();
+        value = transformListText(
+          value,
+          pattern: field.pattern,
+          replacement: field.replacement,
+        );
 
         if ((key == 'url' || key == 'thumbnail') && value.isNotEmpty) {
           final uri = baseUri.resolve(value);
@@ -338,3 +381,67 @@ ListExtractionReport extractListRows(
 }
 
 String encodeListRuleCache(dynamic data) => jsonEncode(data);
+
+/// 通常HTML・描画後DOMのどちらも同じ抽出処理を使用する。
+/// 正規表現などの処理が長引いた場合はIsolateごと停止する。
+Future<ListExtractionReport> extractListRowsSafely(
+  HtmlProbePage page,
+  ListExtractionRule rule, {
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  final port = ReceivePort();
+  final result = Completer<ListExtractionReport>();
+  Isolate? worker;
+
+  final subscription = port.listen((dynamic message) {
+    if (result.isCompleted) return;
+
+    if (message is List &&
+        message.length == 2 &&
+        message[0] == 'ok' &&
+        message[1] is ListExtractionReport) {
+      result.complete(message[1] as ListExtractionReport);
+    } else if (message is List &&
+        message.length == 2 &&
+        message[0] == 'error') {
+      result.completeError(FormatException(message[1].toString()));
+    } else {
+      result.completeError(StateError('一覧の抽出処理が終了しました：$message'));
+    }
+  });
+
+  try {
+    worker = await Isolate.spawn<List<Object?>>(
+      _listExtractionWorker,
+      <Object?>[port.sendPort, page, rule],
+      onError: port.sendPort,
+      onExit: port.sendPort,
+      errorsAreFatal: true,
+    );
+
+    return await result.future.timeout(
+      timeout,
+      onTimeout: () => throw const FormatException(
+        '一覧テストが時間上限を超えました。'
+        '正規表現やセレクターを簡単にしてください',
+      ),
+    );
+  } finally {
+    worker?.kill(priority: Isolate.immediate);
+    await subscription.cancel();
+    port.close();
+  }
+}
+
+void _listExtractionWorker(List<Object?> input) {
+  final port = input[0] as SendPort;
+  try {
+    final report = extractListRows(
+      input[1] as HtmlProbePage,
+      input[2] as ListExtractionRule,
+    );
+    port.send(<Object?>['ok', report]);
+  } catch (error) {
+    port.send(<Object?>['error', error.toString()]);
+  }
+}
