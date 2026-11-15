@@ -1,3 +1,4 @@
+import 'peppercarrot_metadata.dart';
 import 'package:dio/dio.dart';
 import 'package:html/parser.dart' as html;
 
@@ -154,7 +155,11 @@ class PepperCarrotAdapter extends SourceAdapter {
     ];
   }
 
-  ComicChapter parseChapter(String address, String title) {
+  ComicChapter parseChapter(
+    String address,
+    String title, {
+    String? publishedDateText,
+  }) {
     final url = Uri.parse(address);
 
     if (url.scheme != 'https' ||
@@ -207,6 +212,7 @@ class PepperCarrotAdapter extends SourceAdapter {
       // 既存の閲覧位置のキーを維持する。
       progressSourceId: url.host,
       progressChapterId: url.path,
+      publishedDateText: publishedDateText,
     );
   }
 
@@ -226,6 +232,9 @@ class PepperCarrotAdapter extends SourceAdapter {
         final chapter = parseChapter(
           work.url.resolve(link.attributes['href']!).toString(),
           link.text,
+          publishedDateText: pepperCarrotPublishedDate(
+            link.parent?.querySelector('span.caption-smaller')?.text,
+          ),
         );
 
         if (chapter.language == language && chapter.workId == work.id) {
@@ -310,6 +319,9 @@ class PepperCarrotAdapter extends SourceAdapter {
       return parseChapter(
         (values['url'] ?? values['sourceUrl']) as String,
         values['title'] as String,
+        publishedDateText: values['publishedDateText'] is String
+            ? values['publishedDateText'] as String
+            : null,
       );
     } catch (_) {
       return null;

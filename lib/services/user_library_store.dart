@@ -1,3 +1,4 @@
+import 'favorite_update_store.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -205,6 +206,8 @@ class UserLibraryStore extends ChangeNotifier {
     ].take(200).toList();
 
     await _commit(List.of(_favorites), next);
+
+    await FavoriteUpdateStore.forRoot(root).markRead(item.workKey, chapter.id);
   });
 
   Future<void> removeHistory(LibraryItem item) => _serialize(() async {

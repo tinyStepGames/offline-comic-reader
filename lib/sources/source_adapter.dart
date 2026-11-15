@@ -91,6 +91,7 @@ class ComicChapter {
     required this.storageId,
     required this.progressSourceId,
     required this.progressChapterId,
+    this.publishedDateText,
   });
 
   final String sourceId;
@@ -107,6 +108,10 @@ class ComicChapter {
   final String progressSourceId;
   final String progressChapterId;
 
+  /// サイト側が提供する公開日の表示文字列。
+  /// 共通側では形式・タイムゾーン・日付精度を推測しない。
+  final String? publishedDateText;
+
   Map<String, dynamic> toJson() => {
     'sourceId': sourceId,
     'language': language,
@@ -117,6 +122,7 @@ class ComicChapter {
     'storageId': storageId,
     'progressSourceId': progressSourceId,
     'progressChapterId': progressChapterId,
+    'publishedDateText': publishedDateText,
   };
 
   factory ComicChapter.fromJson(Map<String, dynamic> data) {
@@ -130,6 +136,7 @@ class ComicChapter {
       storageId: data['storageId'] as String,
       progressSourceId: data['progressSourceId'] as String,
       progressChapterId: data['progressChapterId'] as String,
+      publishedDateText: data['publishedDateText'] as String?,
     );
   }
 }

@@ -1,3 +1,6 @@
+import 'chapter_details.dart';
+import 'chapter_order.dart';
+import 'favorite_updates_page.dart';
 import 'cover_widgets.dart';
 import 'library_widgets.dart';
 import 'services/user_library_store.dart';
@@ -222,6 +225,22 @@ class _SourceHomeState extends State<SourceHome> {
           backgroundColor: Colors.black,
           title: Text(title),
           actions: [
+            if (_section == 1)
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => FavoriteUpdatesPage(
+                        adapter: widget.adapter,
+                        store: widget.store,
+                        library: UserLibraryStore.forRoot(widget.store.root),
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.fiber_new_outlined),
+                label: const Text('新着'),
+              ),
             if (_section == 0)
               IconButton(
                 tooltip: '言語タブを追加',
@@ -460,6 +479,235 @@ class ChapterListPage extends StatefulWidget {
 }
 
 class _ChapterListPageState extends State<ChapterListPage> {
+  String? _lastOpenedChapterId;
+  bool _readingEntryReady = false;
+  String? _readingEntryError;
+
+  UserLibraryStore get _readingLibrary =>
+      UserLibraryStore.forRoot(widget.store.root);
+
+  void _syncReadingEntry() {
+    if (!mounted) return;
+
+    String? latest;
+
+    for (final item in _readingLibrary.history) {
+      if (item.sourceId == widget.adapter.id &&
+          item.tab.query.language == widget.tab.query.language &&
+          item.work.id == widget.work.id) {
+        latest = item.chapter?.id;
+        break;
+      }
+    }
+
+    setState(() {
+      _lastOpenedChapterId = latest;
+      _readingEntryReady = true;
+      _readingEntryError = null;
+    });
+  }
+
+  Future<void> _loadReadingEntry() async {
+    try {
+      await _readingLibrary.load();
+      _syncReadingEntry();
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _readingEntryError = '履歴を読み込めませんでした：$error';
+      });
+    }
+  }
+
+  Widget _readingEntryButton() {
+    final target = readingEntryChapter(_chapters, _lastOpenedChapterId);
+
+    final hasHistory = _lastOpenedChapterId != null;
+    final error = _readingEntryError;
+
+    final String title;
+    final String detail;
+
+    if (error != null) {
+      title = '履歴の再読み込み';
+      detail = '履歴の読み込みに失敗しました';
+    } else if (!_readingEntryReady) {
+      title = '読書履歴を読み込み中';
+      detail = 'しばらくお待ちください';
+    } else if (hasHistory && target == null) {
+      title = '前回の話が一覧にありません';
+      detail = '一覧を更新するか、読みたい話を選んでください';
+    } else {
+      title = hasHistory ? '続きから読む' : '最初の話を読む';
+      detail = target?.title ?? 'チャプターがありません';
+    }
+
+    final buttonHeight =
+        (MediaQuery.textScalerOf(context).scale(14) * 1.4 * 2).ceilToDouble() +
+        28;
+
+    return SizedBox(
+      height: buttonHeight,
+      child: Tooltip(
+        message: error ?? '$title\n$detail',
+        child: FilledButton.icon(
+          onPressed: _locked
+              ? null
+              : error != null
+              ? _loadReadingEntry
+              : !_readingEntryReady || target == null
+              ? null
+              : () => _open(target),
+          icon: const Icon(Icons.play_arrow),
+          label: SizedBox(
+            width: double.infinity,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chapterLabels(
+    ComicChapter chapter,
+    bool saved,
+    double titleHeight,
+    double subtitleHeight,
+    double dateHeight,
+  ) {
+    final previous = chapter.id == _lastOpenedChapterId;
+
+    final status = [
+      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
+      if (previous) '前回開いた話',
+    ].join('・');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: titleHeight,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              chapter.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 16, height: 1.3),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: subtitleHeight,
+          child: Tooltip(
+            message: status,
+            child: Text(
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.3,
+                color: previous
+                    ? Colors.lightBlueAccent
+                    : saved
+                    ? Colors.tealAccent
+                    : Colors.white54,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: dateHeight,
+          child: Tooltip(
+            message: chapterDateLabel(chapter),
+            child: Text(
+              chapterDateLabel(chapter),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: Colors.white54,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  bool _chapterDescending = false;
+  bool _sortChanging = false;
+
+  final ScrollController _chapterListController = ScrollController();
+
+  String get _sortCacheKey => chapterSortCacheKey(
+    sourceId: widget.adapter.id,
+    language: widget.tab.query.language,
+    workId: widget.work.id,
+  );
+
+  Future<void> _restoreChapterSort() async {
+    final saved = await widget.store.readCache(_sortCacheKey);
+    _chapterDescending = saved is Map && saved['descending'] == true;
+  }
+
+  Future<void> _setChapterDescending(bool descending) async {
+    if (_locked || descending == _chapterDescending) return;
+
+    setState(() => _sortChanging = true);
+
+    try {
+      await widget.store.writeCache(_sortCacheKey, {'descending': descending});
+
+      if (!mounted) return;
+
+      setState(() => _chapterDescending = descending);
+
+      if (_chapterListController.hasClients) {
+        _chapterListController.jumpTo(0);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _status = '並び順を保存できませんでした。\n$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sortChanging = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _readingLibrary.removeListener(_syncReadingEntry);
+    _chapterListController.dispose();
+    super.dispose();
+  }
+
   List<ComicChapter> _chapters = [];
   Set<String> _saved = {};
 
@@ -468,7 +716,7 @@ class _ChapterListPageState extends State<ChapterListPage> {
   bool _stop = false;
   String _status = '';
 
-  bool get _locked => _busy || _batch;
+  bool get _locked => _busy || _batch || _sortChanging;
 
   String get _cacheKey =>
       '${widget.adapter.id}:chapters:${widget.tab.query.toJson()}:${widget.work.id}';
@@ -481,10 +729,15 @@ class _ChapterListPageState extends State<ChapterListPage> {
   @override
   void initState() {
     super.initState();
+    _readingLibrary.addListener(_syncReadingEntry);
+    _loadReadingEntry();
     _initialize();
   }
 
   Future<void> _initialize() async {
+    await _restoreChapterSort();
+    if (!mounted) return;
+
     final entries = <String, ComicChapter>{};
     final cached = await widget.store.readCache(_cacheKey);
 
@@ -802,6 +1055,11 @@ class _ChapterListPageState extends State<ChapterListPage> {
   // chapter-list-stable-layout-v1
   @override
   Widget build(BuildContext context) {
+    final displayedChapters = chapterDisplayOrder(
+      _chapters,
+      descending: _chapterDescending,
+    );
+
     final textScaler = MediaQuery.textScalerOf(context);
 
     // 文字サイズの設定に合わせて領域を確保し、
@@ -809,7 +1067,10 @@ class _ChapterListPageState extends State<ChapterListPage> {
     final statusHeight = textScaler.scale(14) * 1.4 * 2 + 8;
     final titleHeight = textScaler.scale(16) * 1.3 * 2;
     final subtitleHeight = textScaler.scale(14) * 1.3;
-    final rowHeight = titleHeight + subtitleHeight + 24;
+    final dateHeight = (textScaler.scale(12) * 1.4).ceilToDouble() + 4;
+
+    final rowHeight =
+        (titleHeight + subtitleHeight + dateHeight + 24).ceilToDouble() + 8;
 
     return PopScope(
       canPop: !_locked,
@@ -817,6 +1078,27 @@ class _ChapterListPageState extends State<ChapterListPage> {
         appBar: AppBar(
           title: Text('${widget.work.title}・${widget.tab.title}'),
           actions: [
+            PopupMenuButton<bool>(
+              tooltip: _chapterDescending ? '並び順：降順' : '並び順：昇順',
+              enabled: !_locked,
+              initialValue: _chapterDescending,
+              onSelected: _setChapterDescending,
+              icon: Icon(
+                _chapterDescending ? Icons.arrow_downward : Icons.arrow_upward,
+              ),
+              itemBuilder: (_) => [
+                CheckedPopupMenuItem<bool>(
+                  value: false,
+                  checked: !_chapterDescending,
+                  child: const Text('昇順・古い話から'),
+                ),
+                CheckedPopupMenuItem<bool>(
+                  value: true,
+                  checked: _chapterDescending,
+                  child: const Text('降順・新しい話から'),
+                ),
+              ],
+            ),
             FavoriteWorkButton(
               library: UserLibraryStore.forRoot(widget.store.root),
               sourceId: widget.adapter.id,
@@ -837,6 +1119,8 @@ class _ChapterListPageState extends State<ChapterListPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  _readingEntryButton(),
+                  const SizedBox(height: 8),
                   SizedBox(
                     height: statusHeight,
                     child: Align(
@@ -887,14 +1171,15 @@ class _ChapterListPageState extends State<ChapterListPage> {
 
             Expanded(
               child: ListView.builder(
+                controller: _chapterListController,
                 key: PageStorageKey<String>(
                   'chapters:${widget.adapter.id}:'
                   '${widget.tab.id}:${widget.work.id}',
                 ),
                 itemExtent: rowHeight,
-                itemCount: _chapters.length,
+                itemCount: displayedChapters.length,
                 itemBuilder: (context, index) {
-                  final chapter = _chapters[index];
+                  final chapter = displayedChapters[index];
                   final saved = _saved.contains(chapter.id);
 
                   return Material(
@@ -910,40 +1195,12 @@ class _ChapterListPageState extends State<ChapterListPage> {
                         child: Row(
                           children: [
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  SizedBox(
-                                    height: titleHeight,
-                                    child: Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Text(
-                                        chapter.title,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          height: 1.3,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    height: subtitleHeight,
-                                    child: Text(
-                                      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        height: 1.3,
-                                        color: saved
-                                            ? Colors.tealAccent
-                                            : Colors.white54,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                              child: _chapterLabels(
+                                chapter,
+                                saved,
+                                titleHeight,
+                                subtitleHeight,
+                                dateHeight,
                               ),
                             ),
                             const SizedBox(width: 8),
