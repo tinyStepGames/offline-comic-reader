@@ -1,9 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
-import 'reader_page.dart';
-import 'reading_progress.dart';
+import 'chapter_reader_page.dart';
 import 'services/download_store.dart';
 import 'sources/source_adapter.dart';
 
@@ -475,45 +472,24 @@ class _ChapterListPageState extends State<ChapterListPage> {
 
   Future<void> _open(ComicChapter chapter) async {
     if (_locked) return;
+
+    final index = _chapters.indexWhere((item) => item.id == chapter.id);
+
+    if (index < 0) return;
+
     setState(() => _busy = true);
 
     try {
-      List<File> files = [];
-      try {
-        files = await widget.store.load(chapter);
-      } catch (_) {
-        // 不完全な保存データならオンラインで開く。
-      }
-
-      List<Uri> images = [];
-
-      if (files.isEmpty) {
-        final content = await widget.adapter.fetchContent(chapter);
-        images = content.images;
-
-        // 閲覧そのものを、クレジットのローカル保存失敗で止めない。
-        try {
-          await widget.store.rememberCredits(chapter, content.credits);
-        } catch (_) {}
-      }
-
-      if (!mounted) return;
-
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => ReaderPage(
-            files: files,
-            imageUrls: images,
-            title: chapter.title,
-            progressKey: ReadingKey(
-              sourceId: chapter.progressSourceId,
-              chapterId: chapter.progressChapterId,
-            ),
+          builder: (_) => ChapterReaderPage(
+            adapter: widget.adapter,
+            store: widget.store,
+            chapters: List<ComicChapter>.unmodifiable(_chapters),
+            initialIndex: index,
           ),
         ),
       );
-    } catch (error) {
-      _message('開けませんでした。未保存の話にはネット接続が必要です。\n$error');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -16,12 +16,16 @@ class ReaderPage extends StatefulWidget {
     this.title = '漫画リーダー',
     this.imageUrls = const [],
     this.progressKey,
+    this.onPreviousChapter,
+    this.onNextChapter,
   });
 
   final List<File> files;
   final List<Uri> imageUrls;
   final String title;
   final ReadingKey? progressKey;
+  final VoidCallback? onPreviousChapter;
+  final VoidCallback? onNextChapter;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -94,7 +98,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           ..sort((a, b) => a.index.compareTo(b.index));
 
     if (visible.isNotEmpty) {
-      _setIndex(visible.first.index);
+      final offset = _hasChapterNavigation ? 1 : 0;
+      final pageItems = visible.where(
+        (item) => item.index >= offset && item.index < _count + offset,
+      );
+
+      if (pageItems.isNotEmpty) {
+        _setIndex(pageItems.first.index - offset);
+      }
     }
   }
 
@@ -258,14 +269,71 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
+  bool get _hasChapterNavigation =>
+      widget.onPreviousChapter != null || widget.onNextChapter != null;
+
+  Widget _chapterNavigation() {
+    if (!_hasChapterNavigation) {
+      return const SizedBox.shrink();
+    }
+
+    return SizedBox(
+      height: 64,
+      child: ColoredBox(
+        color: Colors.black,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: widget.onPreviousChapter == null
+                      ? null
+                      : () {
+                          _saveNow();
+                          widget.onPreviousChapter!();
+                        },
+                  icon: const Icon(Icons.skip_previous),
+                  label: const Text('前の話'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: widget.onNextChapter == null
+                      ? null
+                      : () {
+                          _saveNow();
+                          widget.onNextChapter!();
+                        },
+                  icon: const Icon(Icons.skip_next),
+                  label: const Text('次の話'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _verticalReader() {
+    final offset = _hasChapterNavigation ? 1 : 0;
+
     return ScrollablePositionedList.builder(
-      initialScrollIndex: _verticalStart,
+      initialScrollIndex: _verticalStart + offset,
       itemScrollController: _verticalController,
       itemPositionsListener: _positions,
       padding: EdgeInsets.zero,
-      itemCount: _count,
-      itemBuilder: (context, index) {
+      itemCount: _count + offset * 2,
+      itemBuilder: (context, itemIndex) {
+        if (_hasChapterNavigation &&
+            (itemIndex == 0 || itemIndex == _count + 1)) {
+          return _chapterNavigation();
+        }
+
+        final index = itemIndex - offset;
+
         return GestureDetector(
           onDoubleTap: () => _zoom(index),
           child: _image(index, width: double.infinity, fit: BoxFit.fitWidth),
@@ -275,16 +343,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   Widget _horizontalReader() {
-    return PageView.builder(
-      controller: _horizontalController,
-      itemCount: _count,
-      onPageChanged: _setIndex,
-      itemBuilder: (context, index) {
-        return GestureDetector(
-          onDoubleTap: () => _zoom(index),
-          child: SizedBox.expand(child: Center(child: _image(index))),
-        );
-      },
+    return Column(
+      children: [
+        _chapterNavigation(),
+        Expanded(
+          child: PageView.builder(
+            controller: _horizontalController,
+            itemCount: _count,
+            onPageChanged: _setIndex,
+            itemBuilder: (context, index) {
+              return GestureDetector(
+                onDoubleTap: () => _zoom(index),
+                child: SizedBox.expand(child: Center(child: _image(index))),
+              );
+            },
+          ),
+        ),
+        _chapterNavigation(),
+      ],
     );
   }
 
@@ -407,7 +483,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               ),
             if (showControls && _mode == ReadingMode.horizontal && _count > 0)
               Positioned(
-                bottom: 0,
+                bottom: _hasChapterNavigation ? 64 : 0,
                 left: 0,
                 right: 0,
                 child: ColoredBox(
