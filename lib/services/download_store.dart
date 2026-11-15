@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 
 import '../sources/source_adapter.dart';
 
+part 'resumable_downloads.dart';
+
 class DownloadStore {
   DownloadStore(this.root, {this.maxConcurrentImages = 3}) {
     if (maxConcurrentImages < 1 || maxConcurrentImages > 4) {
@@ -23,6 +25,10 @@ class DownloadStore {
   final int maxConcurrentImages;
 
   final Directory root;
+
+  final Set<String> _activeDownloads = {};
+
+  bool get hasActiveDownloads => _activeDownloads.isNotEmpty;
 
   final Dio _dio = Dio(
     BaseOptions(
@@ -144,132 +150,7 @@ class DownloadStore {
     ComicChapter chapter,
     ChapterContent content,
     void Function(int done, int total) progress,
-  ) async {
-    // 呼び出し元でリストが変更されても影響を受けないように固定する。
-    final images = List<Uri>.unmodifiable(content.images);
-
-    if (images.isEmpty) {
-      throw const FormatException('保存対象の画像がありません');
-    }
-
-    // ファイルに変更を加える前に、全URLの取得方式を確認する。
-    for (final url in images) {
-      if (!['https', 'http'].contains(url.scheme) || url.host.isEmpty) {
-        throw const FormatException('未対応の画像取得方式です');
-      }
-    }
-
-    final folder = directory(chapter);
-    await folder.create(recursive: true);
-
-    final manifest = _manifest(chapter);
-
-    // すべての画像が正常に保存されるまで、完了扱いにしない。
-    if (await manifest.exists()) {
-      await manifest.delete();
-    }
-
-    await rememberCredits(chapter, content.credits);
-
-    // 完了した順ではなく、元のページ順にファイル名を確定する。
-    final names = List<String>.generate(
-      images.length,
-      (index) => '${index.toString().padLeft(4, '0')}.jpg',
-      growable: false,
-    );
-
-    var nextIndex = 0;
-    var completed = 0;
-    var stopped = false;
-
-    progress(0, images.length);
-
-    Future<void> saveImage(int index) async {
-      final target = File(p.join(folder.path, names[index]));
-      final temporary = File('${target.path}.part');
-
-      try {
-        await _dio.download(
-          images[index].toString(),
-          temporary.path,
-          deleteOnError: true,
-        );
-
-        // 従来どおり、実際に画像として読み込めるか確認する。
-        final codec = await ui.instantiateImageCodec(
-          await temporary.readAsBytes(),
-          targetWidth: 64,
-        );
-
-        try {
-          final frame = await codec.getNextFrame();
-          frame.image.dispose();
-        } finally {
-          codec.dispose();
-        }
-
-        if (await target.exists()) {
-          await target.delete();
-        }
-
-        await temporary.rename(target.path);
-      } finally {
-        // 失敗した一時ファイルは可能な範囲で片付ける。
-        // 片付けの失敗で、本来の通信エラーなどを隠さない。
-        try {
-          if (await temporary.exists()) {
-            await temporary.delete();
-          }
-        } catch (_) {
-          // 次回の取得で同じ一時パスを使用する。
-        }
-      }
-    }
-
-    Future<void> worker() async {
-      while (!stopped) {
-        // この取得部分にはawaitを挟まず、各ワーカーへ別の番号を渡す。
-        final index = nextIndex;
-        if (index >= images.length) return;
-        nextIndex++;
-
-        try {
-          await saveImage(index);
-
-          completed++;
-          progress(completed, images.length);
-        } catch (_) {
-          // 他ワーカーは実行中の画像だけを処理し、
-          // それ以降の画像を新しく開始しない。
-          stopped = true;
-          rethrow;
-        }
-      }
-    }
-
-    final workerCount = images.length < maxConcurrentImages
-        ? images.length
-        : maxConcurrentImages;
-
-    // eagerError:falseにより、失敗時も実行中のワーカー終了を待つ。
-    // リトライと前回の書き込みが重ならないようにする。
-    await Future.wait<void>(
-      List<Future<void>>.generate(workerCount, (_) => worker()),
-      eagerError: false,
-    );
-
-    // 全ページ成功時だけ完了情報を書き込む。
-    await _writeJson(manifest, {
-      'version': 2,
-      'episodeId': chapter.storageId,
-      'title': chapter.title,
-      'sourceUrl': chapter.url.toString(),
-      'chapter': chapter.toJson(),
-      'complete': true,
-      'pages': names,
-    });
-  }
-
+  ) => _downloadResumable(chapter, content, progress);
   Future<void> delete(ComicChapter chapter) async {
     final target = directory(chapter);
     if (await target.exists()) {

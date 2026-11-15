@@ -1,3 +1,4 @@
+import 'incomplete_downloads_page.dart';
 import 'package:flutter/material.dart';
 
 import 'chapter_details.dart';
@@ -280,6 +281,23 @@ class _SavedDownloadsPaneState extends State<SavedDownloadsPane> {
                   ),
                 ),
               ),
+            ),
+            IconButton(
+              tooltip: '未完了ダウンロード',
+              onPressed: _busy || widget.store.hasActiveDownloads
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => IncompleteDownloadsPage(
+                            adapter: widget.adapter,
+                            store: widget.store,
+                          ),
+                        ),
+                      );
+                      if (mounted) await _refresh();
+                    },
+              icon: const Icon(Icons.downloading_outlined),
             ),
             IconButton(
               tooltip: '確認事項',
