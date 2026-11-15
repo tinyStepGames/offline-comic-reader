@@ -16,6 +16,7 @@ class ChapterReaderPage extends StatefulWidget {
     required this.store,
     required this.chapters,
     required this.initialIndex,
+    this.onChapterOpened,
   }) : assert(chapters.length > 0),
        assert(initialIndex >= 0 && initialIndex < chapters.length);
 
@@ -23,6 +24,7 @@ class ChapterReaderPage extends StatefulWidget {
   final DownloadStore store;
   final List<ComicChapter> chapters;
   final int initialIndex;
+  final Future<void> Function(ComicChapter chapter)? onChapterOpened;
 
   @override
   State<ChapterReaderPage> createState() => _ChapterReaderPageState();
@@ -91,6 +93,16 @@ class _ChapterReaderPageState extends State<ChapterReaderPage> {
         _images = images;
         _opened = true;
       });
+
+      try {
+        await widget.onChapterOpened?.call(chapter);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('閲覧履歴を保存できませんでした：$error')));
+        }
+      }
     } catch (error) {
       if (!mounted) return;
 

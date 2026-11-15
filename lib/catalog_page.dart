@@ -1,3 +1,6 @@
+import 'cover_widgets.dart';
+import 'library_widgets.dart';
+import 'services/user_library_store.dart';
 import 'package:flutter/material.dart';
 
 import 'chapter_reader_page.dart';
@@ -15,6 +18,7 @@ class SourceHome extends StatefulWidget {
 }
 
 class _SourceHomeState extends State<SourceHome> {
+  int _section = 0;
   late List<SourceTab> _tabs;
   List<SourceTab> _knownTabs = [];
   bool _loading = true;
@@ -116,6 +120,84 @@ class _SourceHomeState extends State<SourceHome> {
     }
   }
 
+  Future<void> _openFavorite(LibraryItem item) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterListPage(
+          adapter: widget.adapter,
+          store: widget.store,
+          tab: item.tab,
+          work: item.work,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openHistory(LibraryItem item) async {
+    final chapter = item.chapter;
+    if (chapter == null) return;
+
+    final cacheKey =
+        '${widget.adapter.id}:chapters:'
+        '${item.tab.query.toJson()}:${item.work.id}';
+
+    final chapters = <ComicChapter>[];
+    final cached = await widget.store.readCache(cacheKey);
+
+    if (cached is List) {
+      for (final entry in cached) {
+        try {
+          final parsed = ComicChapter.fromJson(
+            Map<String, dynamic>.from(entry as Map),
+          );
+
+          if (parsed.sourceId == widget.adapter.id &&
+              parsed.language == item.tab.query.language &&
+              parsed.workId == item.work.id) {
+            chapters.add(parsed);
+          }
+        } catch (_) {
+          // 読める項目を優先。
+        }
+      }
+    }
+
+    if (chapters.isEmpty) {
+      try {
+        chapters.addAll(
+          await widget.adapter.fetchChapters(item.work, item.tab.query),
+        );
+      } catch (_) {
+        // オフラインでも、履歴の話だけは開けるようにする。
+      }
+    }
+
+    var index = chapters.indexWhere((entry) => entry.id == chapter.id);
+
+    if (index < 0) {
+      chapters
+        ..clear()
+        ..add(chapter);
+      index = 0;
+    }
+
+    if (!mounted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterReaderPage(
+          adapter: widget.adapter,
+          store: widget.store,
+          chapters: List.unmodifiable(chapters),
+          initialIndex: (index),
+          onChapterOpened: (opened) => UserLibraryStore.forRoot(
+            widget.store.root,
+          ).remember(widget.adapter.id, item.tab, item.work, opened),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     widget.adapter.close();
@@ -125,37 +207,86 @@ class _SourceHomeState extends State<SourceHome> {
 
   @override
   Widget build(BuildContext context) {
+    final title = switch (_section) {
+      1 => 'お気に入り',
+      2 => '閲覧履歴',
+      _ => widget.adapter.name,
+    };
+
     return DefaultTabController(
       key: ValueKey(_tabs.map((item) => item.id).join('|')),
       length: _tabs.length,
       child: Scaffold(
+        backgroundColor: Colors.black,
         appBar: AppBar(
-          title: Text(widget.adapter.name),
+          backgroundColor: Colors.black,
+          title: Text(title),
           actions: [
-            IconButton(
-              tooltip: 'タブを追加',
-              onPressed: _loading ? null : _addTab,
-              icon: const Icon(Icons.add),
+            if (_section == 0)
+              IconButton(
+                tooltip: '言語タブを追加',
+                onPressed: _loading ? null : _addTab,
+                icon: const Icon(Icons.add),
+              ),
+          ],
+          bottom: _section == 0
+              ? TabBar(
+                  isScrollable: true,
+                  tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+                )
+              : null,
+        ),
+        body: IndexedStack(
+          index: _section,
+          children: [
+            _loading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+                    children: [
+                      for (final tab in _tabs)
+                        WorkListPage(
+                          key: ValueKey(tab.id),
+                          adapter: widget.adapter,
+                          store: widget.store,
+                          tab: tab,
+                        ),
+                    ],
+                  ),
+            LibraryShelf(
+              library: UserLibraryStore.forRoot(widget.store.root),
+              sourceId: widget.adapter.id,
+              sourceName: widget.adapter.name,
+              history: false,
+              onOpen: _openFavorite,
+            ),
+            LibraryShelf(
+              library: UserLibraryStore.forRoot(widget.store.root),
+              sourceId: widget.adapter.id,
+              sourceName: widget.adapter.name,
+              history: true,
+              onOpen: _openHistory,
             ),
           ],
-          bottom: TabBar(
-            isScrollable: true,
-            tabs: [for (final tab in _tabs) Tab(text: tab.title)],
-          ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : TabBarView(
-                children: [
-                  for (final tab in _tabs)
-                    WorkListPage(
-                      key: ValueKey(tab.id),
-                      adapter: widget.adapter,
-                      store: widget.store,
-                      tab: tab,
-                    ),
-                ],
-              ),
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: _section,
+          onTap: (value) => setState(() => _section = value),
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: const Color(0xFF1A1A1A),
+          selectedItemColor: Colors.lightBlueAccent,
+          unselectedItemColor: Colors.white54,
+          selectedFontSize: 12,
+          unselectedFontSize: 12,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '発見'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.star_border),
+              activeIcon: Icon(Icons.star),
+              label: 'お気に入り',
+            ),
+            BottomNavigationBarItem(icon: Icon(Icons.history), label: '履歴'),
+          ],
+        ),
       ),
     );
   }
@@ -260,76 +391,45 @@ class _WorkListPageState extends State<WorkListPage>
 
     return Column(
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton.icon(
-              onPressed: _busy ? null : _refresh,
-              icon: const Icon(Icons.refresh),
-              label: const Text('作品一覧を更新'),
-            ),
-          ],
+        SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Text('${_works.length}作品'),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _busy ? null : _refresh,
+                icon: const Icon(Icons.refresh),
+                label: const Text('更新'),
+              ),
+            ],
+          ),
         ),
-        if (_busy) const LinearProgressIndicator(),
+        SizedBox(
+          height: 3,
+          child: _busy
+              ? const LinearProgressIndicator(minHeight: 3)
+              : const SizedBox.expand(),
+        ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(8),
             child: Text(_error!, style: const TextStyle(color: Colors.white60)),
           ),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: _works.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final work = _works[index];
-
-              return Material(
-                color: const Color(0xFF151515),
-                borderRadius: BorderRadius.circular(12),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => ChapterListPage(
-                          adapter: widget.adapter,
-                          store: widget.store,
-                          tab: widget.tab,
-                          work: work,
-                        ),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: SizedBox(
-                            width: 128,
-                            height: 96,
-                            child: work.thumbnail == null
-                                ? _placeholder()
-                                : Image.network(
-                                    work.thumbnail!,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, error, stackTrace) =>
-                                        _placeholder(),
-                                  ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Text(
-                            work.title,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right),
-                      ],
-                    ),
+          child: CoverGrid<ComicWork>(
+            items: _works,
+            workOf: (work) => work,
+            placeholderBuilder: _placeholder,
+            onOpen: (work) {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ChapterListPage(
+                    adapter: widget.adapter,
+                    store: widget.store,
+                    tab: widget.tab,
+                    work: work,
                   ),
                 ),
               );
@@ -487,6 +587,9 @@ class _ChapterListPageState extends State<ChapterListPage> {
             store: widget.store,
             chapters: List<ComicChapter>.unmodifiable(_chapters),
             initialIndex: index,
+            onChapterOpened: (opened) => UserLibraryStore.forRoot(
+              widget.store.root,
+            ).remember(widget.adapter.id, widget.tab, widget.work, opened),
           ),
         ),
       );
@@ -714,6 +817,12 @@ class _ChapterListPageState extends State<ChapterListPage> {
         appBar: AppBar(
           title: Text('${widget.work.title}・${widget.tab.title}'),
           actions: [
+            FavoriteWorkButton(
+              library: UserLibraryStore.forRoot(widget.store.root),
+              sourceId: widget.adapter.id,
+              tab: widget.tab,
+              work: widget.work,
+            ),
             IconButton(
               tooltip: 'チャプター一覧を更新',
               onPressed: _locked ? null : _refresh,
