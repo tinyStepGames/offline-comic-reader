@@ -1,608 +1,586 @@
-part of 'main.dart';
+import 'dart:io';
 
-class ComicSeries {
-  const ComicSeries(this.id, this.title, this.indexFile, this.section);
+import 'package:flutter/material.dart';
 
-  final String id;
-  final String title;
-  final String indexFile;
-  final String section;
+import 'reader_page.dart';
+import 'reading_progress.dart';
+import 'services/download_store.dart';
+import 'sources/source_adapter.dart';
 
-  Uri get url =>
-      Uri.parse('https://www.peppercarrot.com/en/webcomics/$indexFile.html');
-}
+class SourceHome extends StatefulWidget {
+  const SourceHome({super.key, required this.adapter, required this.store});
 
-const comicSeries = [
-  ComicSeries('peppercarrot', 'ペッパー＆キャロット', 'peppercarrot', 'webcomic'),
-  ComicSeries(
-    'mini',
-    'ミニファンタジーシアター',
-    'miniFantasyTheater',
-    'miniFantasyTheater',
-  ),
-  ComicSeries('misc', 'その他', 'misc', 'webcomic-misc'),
-];
-
-class ComicEpisode {
-  const ComicEpisode(this.series, this.title, this.url);
-
-  final ComicSeries series;
-  final String title;
-  final Uri url;
-
-  String get slug => url.pathSegments.last.replaceFirst(RegExp(r'\.html$'), '');
-
-  String get id {
-    if (series.id == 'peppercarrot') {
-      final match = RegExp(r'^ep(\d+)_').firstMatch(slug)!;
-      final number = int.parse(match.group(1)!);
-      return 'peppercarrot-en-ep${number.toString().padLeft(2, '0')}';
-    }
-    return '${series.id}-en-$slug';
-  }
-
-  Map<String, dynamic> toJson() => {'title': title, 'url': url.toString()};
-
-  static ComicEpisode parse(String address, String title) {
-    final url = Uri.parse(address);
-
-    if (url.scheme != 'https' ||
-        url.host != 'www.peppercarrot.com' ||
-        url.hasQuery ||
-        url.hasFragment) {
-      throw const FormatException('未対応のURLです');
-    }
-
-    final match = RegExp(
-      r'^/en/(webcomic|miniFantasyTheater|webcomic-misc)/'
-      r'([A-Za-z0-9_-]+)\.html$',
-    ).firstMatch(url.path);
-
-    if (match == null) {
-      throw const FormatException('チャプターURLではありません');
-    }
-
-    final series = comicSeries.firstWhere(
-      (item) => item.section == match.group(1),
-    );
-
-    if (series.id == 'peppercarrot' &&
-        !RegExp(r'^ep\d+_').hasMatch(match.group(2)!)) {
-      throw const FormatException('話数形式が不正です');
-    }
-
-    return ComicEpisode(
-      series,
-      title.trim().isEmpty ? match.group(2)! : title.trim(),
-      url,
-    );
-  }
-}
-
-class _ComicPageData {
-  const _ComicPageData(this.images, this.credits);
-
-  final List<Uri> images;
-  final String credits;
-}
-
-class CatalogPage extends StatefulWidget {
-  const CatalogPage({super.key, required this.root, this.series});
-
-  final Directory root;
-  final ComicSeries? series;
+  final SourceAdapter adapter;
+  final DownloadStore store;
 
   @override
-  State<CatalogPage> createState() => _CatalogPageState();
+  State<SourceHome> createState() => _SourceHomeState();
 }
 
-class _CatalogPageState extends State<CatalogPage> {
-  final Map<String, String> _seriesThumbnails = {};
-  bool _thumbnailLoading = false;
+class _SourceHomeState extends State<SourceHome> {
+  late List<SourceTab> _tabs;
+  List<SourceTab> _knownTabs = [];
+  bool _loading = true;
 
-  Widget _thumbnailPlaceholder() {
-    return const ColoredBox(
-      color: Color(0xFF252525),
-      child: Center(
-        child: Icon(
-          Icons.collections_bookmark_outlined,
-          size: 36,
-          color: Colors.white38,
-        ),
-      ),
-    );
-  }
-
-  bool _validThumbnail(String address) {
-    final url = Uri.tryParse(address);
-
-    return url != null &&
-        url.scheme == 'https' &&
-        url.host == 'www.peppercarrot.com';
-  }
-
-  Future<void> _loadSeriesThumbnails() async {
-    if (_thumbnailLoading) return;
-
-    setState(() => _thumbnailLoading = true);
-
-    final cache = File(p.join(widget.root.path, 'series-thumbnails.json'));
-
-    try {
-      // 保存済みURLを先に表示する。
-      try {
-        if (await cache.exists()) {
-          final data =
-              jsonDecode(await cache.readAsString()) as Map<String, dynamic>;
-
-          final cached = <String, String>{};
-
-          for (final series in comicSeries) {
-            final address = data[series.id];
-
-            if (address is String && _validThumbnail(address)) {
-              cached[series.id] = address;
-            }
-          }
-
-          if (!mounted) return;
-
-          setState(() {
-            _seriesThumbnails.addAll(cached);
-          });
-        }
-      } catch (_) {
-        // キャッシュが不正でも公式サイトから取得を試す。
-      }
-
-      final indexUrl = Uri.parse(
-        'https://www.peppercarrot.com/ja/webcomics/'
-        'peppercarrot.html',
-      );
-
-      final response = await _dio.get<String>(
-        indexUrl.toString(),
-        options: Options(responseType: ResponseType.plain),
-      );
-
-      final document = html.parse(response.data ?? '');
-
-      const idMap = {
-        'peppercarrot': 'peppercarrot',
-        'miniFantasyTheater': 'mini',
-        'misc': 'misc',
-      };
-
-      final result = <String, String>{};
-
-      // background: url('...') のURL部分を取得。
-      final cssUrl = RegExp(
-        r'''url\(\s*(['"]?)(.*?)\1\s*\)''',
-        caseSensitive: false,
-      );
-
-      for (final link in document.querySelectorAll('a.sidebar-img-btn[id]')) {
-        final seriesId = idMap[link.id];
-        if (seriesId == null) continue;
-
-        final style = link.attributes['style'] ?? '';
-        final match = cssUrl.firstMatch(style);
-        final address = match?.group(2)?.trim();
-
-        if (address == null || address.isEmpty) continue;
-
-        final resolved = indexUrl.resolve(address).toString();
-
-        if (_validThumbnail(resolved)) {
-          result[seriesId] = resolved;
-        }
-      }
-
-      if (result.isEmpty) {
-        throw StateError('作品画像のURLが見つかりません');
-      }
-
-      if (!mounted) return;
-
-      setState(() {
-        _seriesThumbnails.addAll(result);
-      });
-
-      await widget.root.create(recursive: true);
-      await cache.writeAsString(jsonEncode(_seriesThumbnails), flush: true);
-    } catch (_) {
-      // オフライン時などは既存URLまたは代替アイコンを使用。
-    } finally {
-      if (mounted) {
-        setState(() => _thumbnailLoading = false);
-      }
-    }
-  }
-
-  final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-    ),
-  );
-
-  List<ComicEpisode> _episodes = [];
-  final Set<String> _saved = {};
-
-  bool _busy = false;
-  bool _batch = false;
-  bool _stop = false;
-  String? _workingId;
-  String _status = '';
-
-  bool get _locked => _busy || _batch || _workingId != null;
-
-  ComicSeries get _series => widget.series!;
-
-  File get _cache => File(
-    p.join(
-      widget.root.path,
-      _series.id == 'peppercarrot'
-          ? 'catalog.json'
-          : 'catalog-${_series.id}.json',
-    ),
-  );
-
-  EpisodeStore _store(ComicEpisode episode) => EpisodeStore(
-    Directory(p.join(widget.root.path, episode.id)),
-    id: episode.id,
-    url: episode.url,
-    title: episode.title,
-  );
-
-  File _creditsFile(ComicEpisode episode) =>
-      File(p.join(widget.root.path, episode.id, 'credits.txt'));
+  String get _settingsKey => '${widget.adapter.id}:tab-settings';
 
   @override
   void initState() {
     super.initState();
-    if (widget.series != null) {
-      _initialize();
-    } else {
-      _loadSeriesThumbnails();
+    _tabs = widget.adapter.defaultTabs;
+    _knownTabs = List.of(_tabs);
+    _restoreTabs();
+  }
+
+  Future<void> _restoreTabs() async {
+    final cached = await widget.store.readCache(_settingsKey);
+
+    try {
+      if (cached is Map) {
+        final selected = (cached['selected'] as List)
+            .map(
+              (item) =>
+                  SourceTab.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+
+        final known = (cached['known'] as List)
+            .map(
+              (item) =>
+                  SourceTab.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+
+        if (selected.isNotEmpty) {
+          _tabs = selected;
+          _knownTabs = known;
+        }
+      }
+    } catch (_) {
+      // 設定が不正ならアダプターの初期タブを使用する。
+    }
+
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _addTab() async {
+    setState(() => _loading = true);
+
+    try {
+      _knownTabs = await widget.adapter.discoverTabs();
+    } catch (_) {
+      // オフラインなら以前取得した候補を使う。
+    }
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    final candidates = _knownTabs
+        .where((item) => !_tabs.any((tab) => tab.id == item.id))
+        .toList();
+
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('追加候補がありません。必要に応じてネット接続を確認してください。')),
+      );
+      return;
+    }
+
+    final chosen = await showDialog<SourceTab>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('タブを追加'),
+        children: [
+          for (final candidate in candidates)
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.pop(dialogContext, candidate);
+              },
+              child: Text(candidate.title),
+            ),
+        ],
+      ),
+    );
+
+    if (chosen == null || !mounted) return;
+
+    setState(() => _tabs = [..._tabs, chosen]);
+
+    try {
+      await widget.store.writeCache(_settingsKey, {
+        'selected': _tabs.map((item) => item.toJson()).toList(),
+        'known': _knownTabs.map((item) => item.toJson()).toList(),
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('タブ設定を保存できませんでした')));
     }
   }
 
   @override
   void dispose() {
-    _dio.close(force: true);
+    widget.adapter.close();
+    widget.store.close();
     super.dispose();
   }
 
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      key: ValueKey(_tabs.map((item) => item.id).join('|')),
+      length: _tabs.length,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.adapter.name),
+          actions: [
+            IconButton(
+              tooltip: 'タブを追加',
+              onPressed: _loading ? null : _addTab,
+              icon: const Icon(Icons.add),
+            ),
+          ],
+          bottom: TabBar(
+            isScrollable: true,
+            tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+          ),
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(
+                children: [
+                  for (final tab in _tabs)
+                    WorkListPage(
+                      key: ValueKey(tab.id),
+                      adapter: widget.adapter,
+                      store: widget.store,
+                      tab: tab,
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class WorkListPage extends StatefulWidget {
+  const WorkListPage({
+    super.key,
+    required this.adapter,
+    required this.store,
+    required this.tab,
+  });
+
+  final SourceAdapter adapter;
+  final DownloadStore store;
+  final SourceTab tab;
+
+  @override
+  State<WorkListPage> createState() => _WorkListPageState();
+}
+
+class _WorkListPageState extends State<WorkListPage>
+    with AutomaticKeepAliveClientMixin {
+  List<ComicWork> _works = [];
+  bool _busy = true;
+  String? _error;
+
+  String get _cacheKey =>
+      '${widget.adapter.id}:works:${widget.tab.query.toJson()}';
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
   Future<void> _initialize() async {
-    setState(() => _busy = true);
-    await _loadLocal();
+    final cached = await widget.store.readCache(_cacheKey);
+
+    try {
+      if (cached is List) {
+        _works = cached
+            .map(
+              (item) =>
+                  ComicWork.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+      }
+    } catch (_) {
+      _works = [];
+    }
+
+    if (_works.isEmpty) {
+      _works = widget.adapter.fallbackWorks(widget.tab.query);
+    }
 
     if (!mounted) return;
     setState(() => _busy = false);
 
-    // 一覧がまだない作品だけ初回取得する。
-    if (_episodes.isEmpty) {
-      await _refresh();
+    // 初回、または明示更新時に公式ページから画像などを取得。
+    if (cached == null) await _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+
+    try {
+      final works = await widget.adapter.fetchWorks(widget.tab.query);
+
+      await widget.store.writeCache(
+        _cacheKey,
+        works.map((item) => item.toJson()).toList(),
+      );
+
+      if (!mounted) return;
+      setState(() => _works = works);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '更新できませんでした：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _loadLocal() async {
-    final entries = <String, ComicEpisode>{};
+  Widget _placeholder() => const ColoredBox(
+    color: Color(0xFF252525),
+    child: Center(
+      child: Icon(Icons.collections_bookmark_outlined, color: Colors.white38),
+    ),
+  );
 
-    void add(dynamic item) {
-      try {
-        final map = item as Map<String, dynamic>;
-        final episode = ComicEpisode.parse(
-          (map['url'] ?? map['sourceUrl']) as String,
-          map['title'] as String,
-        );
-        if (episode.series.id == _series.id) {
-          entries[episode.id] = episode;
-        }
-      } catch (_) {
-        // 不正な項目だけを無視する。
-      }
-    }
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
 
-    for (final episode in _episodes) {
-      entries[episode.id] = episode;
-    }
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton.icon(
+              onPressed: _busy ? null : _refresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('作品一覧を更新'),
+            ),
+          ],
+        ),
+        if (_busy) const LinearProgressIndicator(),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Text(_error!, style: const TextStyle(color: Colors.white60)),
+          ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.all(12),
+            itemCount: _works.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final work = _works[index];
 
-    try {
-      if (await _cache.exists()) {
-        final data = jsonDecode(await _cache.readAsString()) as List<dynamic>;
-        for (final item in data) {
-          add(item);
-        }
-      }
-    } catch (_) {
-      // 保存フォルダからの復元も試す。
-    }
+              return Material(
+                color: const Color(0xFF151515),
+                borderRadius: BorderRadius.circular(12),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => ChapterListPage(
+                          adapter: widget.adapter,
+                          store: widget.store,
+                          tab: widget.tab,
+                          work: work,
+                        ),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 128,
+                            height: 96,
+                            child: work.thumbnail == null
+                                ? _placeholder()
+                                : Image.network(
+                                    work.thumbnail!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, error, stackTrace) =>
+                                        _placeholder(),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Text(
+                            work.title,
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
 
-    try {
-      await widget.root.create(recursive: true);
+class ChapterListPage extends StatefulWidget {
+  const ChapterListPage({
+    super.key,
+    required this.adapter,
+    required this.store,
+    required this.tab,
+    required this.work,
+  });
 
-      await for (final entity in widget.root.list(followLinks: false)) {
-        if (entity is! Directory) continue;
+  final SourceAdapter adapter;
+  final DownloadStore store;
+  final SourceTab tab;
+  final ComicWork work;
 
+  @override
+  State<ChapterListPage> createState() => _ChapterListPageState();
+}
+
+class _ChapterListPageState extends State<ChapterListPage> {
+  List<ComicChapter> _chapters = [];
+  Set<String> _saved = {};
+
+  bool _busy = true;
+  bool _batch = false;
+  bool _stop = false;
+  String _status = '';
+
+  bool get _locked => _busy || _batch;
+
+  String get _cacheKey =>
+      '${widget.adapter.id}:chapters:${widget.tab.query.toJson()}:${widget.work.id}';
+
+  bool _matches(ComicChapter chapter) =>
+      chapter.sourceId == widget.adapter.id &&
+      chapter.language == widget.tab.query.language &&
+      chapter.workId == widget.work.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    final entries = <String, ComicChapter>{};
+    final cached = await widget.store.readCache(_cacheKey);
+
+    if (cached is List) {
+      for (final item in cached) {
         try {
-          final manifest = File(p.join(entity.path, 'manifest.json'));
-          if (!await manifest.exists()) continue;
-
-          final data =
-              jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
-
-          final episode = ComicEpisode.parse(
-            data['sourceUrl'] as String,
-            data['title'] as String,
+          final chapter = ComicChapter.fromJson(
+            Map<String, dynamic>.from(item as Map),
           );
-
-          if (p.basename(entity.path) == episode.id) {
-            add(data);
-          }
+          if (_matches(chapter)) entries[chapter.id] = chapter;
         } catch (_) {
-          // 未完了・破損データは復元に使わない。
+          // 不正な項目だけを無視。
+        }
+      }
+    }
+
+    try {
+      for (final chapter in await widget.store.localChapters(widget.adapter)) {
+        if (_matches(chapter)) {
+          entries.putIfAbsent(chapter.id, () => chapter);
         }
       }
     } catch (_) {
-      // 画面自体は表示する。
+      // 読める一覧を優先して表示する。
     }
-
-    final saved = <String>{};
-
-    for (final episode in entries.values) {
-      try {
-        if ((await _store(episode).load()).isNotEmpty) {
-          saved.add(episode.id);
-        }
-      } catch (_) {
-        // 未完了の話は保存済みにしない。
-      }
-    }
-
-    final episodes = entries.values.toList()
-      ..sort((a, b) => a.slug.compareTo(b.slug));
 
     if (!mounted) return;
+    _chapters = entries.values.toList()..sort((a, b) => a.id.compareTo(b.id));
 
+    await _checkSaved();
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    if (cached == null) await _refresh();
+  }
+
+  Future<void> _checkSaved() async {
+    final saved = <String>{};
+
+    for (final chapter in _chapters) {
+      try {
+        if ((await widget.store.load(chapter)).isNotEmpty) {
+          saved.add(chapter.id);
+        }
+      } catch (_) {
+        // 不完全な話は保存済みにしない。
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
-      _episodes = episodes;
-      _saved
-        ..clear()
-        ..addAll(saved);
-      _status = '${episodes.length}件・${saved.length}件保存済み';
+      _saved = saved;
+      _status = '${_chapters.length}件・${saved.length}件保存済み';
     });
   }
 
   Future<void> _refresh() async {
     if (_locked) return;
-
     setState(() {
       _busy = true;
       _status = 'チャプター一覧を取得中…';
     });
 
     try {
-      final response = await _dio.get<String>(
-        _series.url.toString(),
-        options: Options(responseType: ResponseType.plain),
+      final chapters = await widget.adapter.fetchChapters(
+        widget.work,
+        widget.tab.query,
       );
 
-      final document = html.parse(response.data ?? '');
-      final entries = <String, ComicEpisode>{};
-
-      for (final link in document.querySelectorAll(
-        'figure.thumbnail figcaption a[href]',
-      )) {
-        try {
-          final episode = ComicEpisode.parse(
-            _series.url.resolve(link.attributes['href']!).toString(),
-            link.text,
-          );
-
-          if (episode.series.id == _series.id) {
-            entries[episode.id] = episode;
-          }
-        } catch (_) {
-          // 別カテゴリや特殊リンクは無視する。
-        }
-      }
-
-      if (entries.isEmpty) {
-        throw StateError('チャプターが見つかりません');
-      }
-
-      await widget.root.create(recursive: true);
-      await _cache.writeAsString(
-        jsonEncode(entries.values.map((item) => item.toJson()).toList()),
-        flush: true,
+      await widget.store.writeCache(
+        _cacheKey,
+        chapters.map((item) => item.toJson()).toList(),
       );
 
       if (!mounted) return;
-      _episodes = entries.values.toList();
-      await _loadLocal();
+      _chapters = chapters;
+      await _checkSaved();
     } catch (error) {
       if (!mounted) return;
-
-      setState(() {
-        _status = '一覧を更新できませんでした。\n$error';
-      });
+      setState(() => _status = '一覧更新に失敗しました。\n$error');
     } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<_ComicPageData> _fetchPage(ComicEpisode episode) async {
-    final response = await _dio.get<String>(
-      episode.url.toString(),
-      options: Options(responseType: ResponseType.plain),
-    );
-
-    final document = html.parse(response.data ?? '');
-    final images = <Uri>[];
-    final seen = <String>{};
-
-    for (final image in document.querySelectorAll(
-      '.webcomic-page img, #panel-all img.mft-cv-image',
-    )) {
-      final src = image.attributes['src'];
-      if (src == null || src.isEmpty) continue;
-
-      final url = episode.url.resolve(src);
-
-      if (url.scheme != 'https' ||
-          url.host != 'www.peppercarrot.com' ||
-          !RegExp(
-            r'\.(?:jpe?g|png|webp|gif)$',
-            caseSensitive: false,
-          ).hasMatch(url.path)) {
-        throw const FormatException('未対応の画像URLです');
-      }
-
-      if (seen.add(url.toString())) {
-        images.add(url);
-      }
-    }
-
-    if (images.isEmpty) {
-      throw StateError('本文画像が見つかりません');
-    }
-
-    // 作品ごとのクレジット・ライセンス表示とリンクを保持する。
-    final sections = document.querySelectorAll(
-      '.webcomic-footer-box, .mft-cv-credits',
-    );
-
-    final notes = <String>[
-      episode.title,
-      '出典: ${episode.url}',
-      '本アプリは非公式リーダーです。画像データは変更していません。',
-    ];
-
-    for (final section in sections) {
-      notes.add(section.text.trim());
-      for (final link in section.querySelectorAll('a[href]')) {
-        final href = link.attributes['href'];
-        if (href != null && href.isNotEmpty) {
-          notes.add(episode.url.resolve(href).toString());
-        }
-      }
-    }
-
-    final credits = notes.toSet().join('\n\n');
-    final store = _store(episode);
-    await store.directory.create(recursive: true);
-    await _creditsFile(episode).writeAsString(credits, flush: true);
-
-    return _ComicPageData(images, credits);
-  }
-
-  Future<void> _open(ComicEpisode episode) async {
+  Future<void> _open(ComicChapter chapter) async {
     if (_locked) return;
-
-    setState(() {
-      _workingId = episode.id;
-      _status = '開いています…';
-    });
+    setState(() => _busy = true);
 
     try {
       List<File> files = [];
       try {
-        files = await _store(episode).load();
+        files = await widget.store.load(chapter);
       } catch (_) {
-        // 不完全ならオンライン閲覧を試す。
+        // 不完全な保存データならオンラインで開く。
       }
 
-      final urls = files.isEmpty ? (await _fetchPage(episode)).images : <Uri>[];
+      List<Uri> images = [];
+
+      if (files.isEmpty) {
+        final content = await widget.adapter.fetchContent(chapter);
+        images = content.images;
+
+        // 閲覧そのものを、クレジットのローカル保存失敗で止めない。
+        try {
+          await widget.store.rememberCredits(chapter, content.credits);
+        } catch (_) {}
+      }
 
       if (!mounted) return;
 
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => ReaderPage(
-            progressKey: ReadingKey(
-              sourceId: episode.url.host,
-              chapterId: episode.url.path,
-            ),
             files: files,
-            imageUrls: urls,
-            title: episode.title,
+            imageUrls: images,
+            title: chapter.title,
+            progressKey: ReadingKey(
+              sourceId: chapter.progressSourceId,
+              chapterId: chapter.progressChapterId,
+            ),
           ),
         ),
       );
     } catch (error) {
       _message('開けませんでした。未保存の話にはネット接続が必要です。\n$error');
     } finally {
-      if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _save(ComicEpisode episode) async {
-    final store = _store(episode);
-
+  Future<void> _save(ComicChapter chapter) async {
     try {
-      if ((await store.load()).isNotEmpty) {
-        if (mounted) {
-          setState(() => _saved.add(episode.id));
-        }
+      if ((await widget.store.load(chapter)).isNotEmpty) {
         return;
       }
     } catch (_) {
-      // 破損・未完了なら再取得。
+      // 不完全な場合は再保存。
     }
 
-    // クレジットを先に保存する。
-    await _fetchPage(episode);
-    await store.directory.create(recursive: true);
+    final content = await widget.adapter.fetchContent(chapter);
 
-    await store.download((done, total) {
+    await widget.store.download(chapter, content, (done, total) {
       if (!mounted) return;
       setState(() {
-        _status = '${episode.title}\n$done / $total ページ保存中';
+        _status = '${chapter.title}\n$done / $total ページ保存中';
       });
     });
-
-    if (mounted) {
-      setState(() => _saved.add(episode.id));
-    }
   }
 
-  Future<void> _download(ComicEpisode episode) async {
+  Future<void> _download(ComicChapter chapter) async {
     if (_locked) return;
-
-    setState(() {
-      _workingId = episode.id;
-      _status = '保存を開始します…';
-    });
+    setState(() => _busy = true);
 
     try {
-      await _save(episode);
+      await _save(chapter);
       _message('保存しました');
     } catch (error) {
       _message('保存に失敗しました。\n$error');
     } finally {
       if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
+        await _checkSaved();
+        if (mounted) setState(() => _busy = false);
       }
     }
+  }
+
+  Future<bool> _confirm(String title, String message) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('キャンセル'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('実行'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _downloadAll() async {
     if (_locked) return;
 
-    final targets = _episodes
-        .where((episode) => !_saved.contains(episode.id))
+    final targets = _chapters
+        .where((chapter) => !_saved.contains(chapter.id))
         .toList();
 
     if (targets.isEmpty) {
@@ -610,29 +588,14 @@ class _CatalogPageState extends State<CatalogPage> {
       return;
     }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('一括ダウンロード'),
-        content: Text(
-          '${_series.title}の未保存${targets.length}件を順番に保存します。\n\n'
-          '通信量と保存容量にご注意ください。\n'
-          '停止操作は現在の話の処理後に反映されます。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('開始'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirm(
+      '一括ダウンロード',
+      '${widget.tab.title}の「${widget.work.title}」から、'
+          '未保存${targets.length}件を順番に保存します。\n\n'
+          '通信量と空き容量にご注意ください。',
     );
 
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     setState(() {
       _batch = true;
@@ -642,41 +605,38 @@ class _CatalogPageState extends State<CatalogPage> {
     var completed = 0;
     final failed = <String>[];
 
-    for (final episode in targets) {
+    for (final chapter in targets) {
       if (!mounted || _stop) break;
 
-      setState(() {
-        _workingId = episode.id;
-        _status =
-            '${completed + failed.length + 1} / '
-            '${targets.length}件目を処理中';
-      });
-
       try {
-        await _save(episode);
+        await _save(chapter);
         completed++;
       } catch (_) {
-        failed.add(episode.title);
+        failed.add(chapter.title);
       }
 
-      if (mounted && !_stop) {
+      if (mounted) {
+        setState(() {
+          _status =
+              '今回保存$completed件・失敗${failed.length}件'
+              '／対象${targets.length}件';
+        });
+      }
+
+      if (!_stop) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
     }
 
     if (!mounted) return;
-
-    await _loadLocal();
+    await _checkSaved();
     if (!mounted) return;
-
-    final stopped = _stop;
 
     setState(() {
       _batch = false;
-      _workingId = null;
       _status =
-          '${stopped ? "停止しました" : "処理が完了しました"}'
-          '：今回保存$completed件・失敗${failed.length}件';
+          '${_stop ? "停止" : "完了"}：'
+          '今回保存$completed件・失敗${failed.length}件';
     });
 
     if (failed.isNotEmpty) {
@@ -696,70 +656,50 @@ class _CatalogPageState extends State<CatalogPage> {
     }
   }
 
-  Future<void> _delete(ComicEpisode episode) async {
+  Future<void> _delete(ComicChapter chapter) async {
     if (_locked) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('保存データを削除'),
-        content: Text('${episode.title}の保存データを削除しますか？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('キャンセル'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('削除する'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirm(
+      '保存データを削除',
+      '${chapter.title}の保存画像を削除しますか？\n閲覧位置の記録は残ります。',
     );
 
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _workingId = episode.id);
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
 
     try {
-      final directory = _store(episode).directory;
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
-      _message('削除しました');
+      await widget.store.delete(chapter);
     } catch (error) {
-      _message('削除を完了できませんでした。\n$error');
+      _message('削除できませんでした。\n$error');
     } finally {
       if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
+        await _checkSaved();
+        if (mounted) setState(() => _busy = false);
       }
     }
   }
 
-  Future<void> _showCredits(ComicEpisode episode) async {
+  Future<void> _credits(ComicChapter chapter) async {
     if (_locked) return;
-    setState(() => _workingId = episode.id);
+    setState(() => _busy = true);
 
     String text;
 
     try {
-      final file = _creditsFile(episode);
-      text = await file.exists()
-          ? await file.readAsString()
-          : (await _fetchPage(episode)).credits;
+      final saved = await widget.store.readCredits(chapter);
+      if (saved != null) {
+        text = saved;
+      } else {
+        final content = await widget.adapter.fetchContent(chapter);
+        text = content.credits;
+        await widget.store.rememberCredits(chapter, text);
+      }
     } catch (_) {
-      text =
-          'この話のクレジットを取得できませんでした。\n'
-          'ネット接続後に再度お試しください。\n\n'
-          '出典: ${episode.url}';
+      text = 'クレジットを取得できませんでした。\n出典: ${chapter.url}';
     }
 
     if (!mounted) return;
-
-    setState(() => _workingId = null);
+    setState(() => _busy = false);
 
     await showDialog<void>(
       context: context,
@@ -783,131 +723,11 @@ class _CatalogPageState extends State<CatalogPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.series == null) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('作品一覧'),
-          actions: [
-            IconButton(
-              tooltip: '作品画像を更新',
-              onPressed: _thumbnailLoading ? null : _loadSeriesThumbnails,
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            if (_thumbnailLoading) const LinearProgressIndicator(),
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: comicSeries.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (context, index) {
-                  final series = comicSeries[index];
-                  final thumbnail = _seriesThumbnails[series.id];
-
-                  return Material(
-                    color: const Color(0xFF151515),
-                    borderRadius: BorderRadius.circular(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                CatalogPage(root: widget.root, series: series),
-                          ),
-                        );
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: SizedBox(
-                                width: 128,
-                                height: 96,
-                                child: thumbnail == null
-                                    ? _thumbnailPlaceholder()
-                                    : Image.network(
-                                        thumbnail,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) {
-                                              return _thumbnailPlaceholder();
-                                            },
-                                        loadingBuilder:
-                                            (context, child, progress) {
-                                              if (progress == null) {
-                                                return child;
-                                              }
-
-                                              return const ColoredBox(
-                                                color: Color(0xFF252525),
-                                                child: Center(
-                                                  child: SizedBox(
-                                                    width: 22,
-                                                    height: 22,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                        ),
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                      ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    series.title,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'チャプター一覧を開く',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Icon(
-                              Icons.chevron_right,
-                              color: Colors.white54,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
     return PopScope(
       canPop: !_locked,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_series.title),
+          title: Text('${widget.work.title}・${widget.tab.title}'),
           actions: [
             IconButton(
               tooltip: 'チャプター一覧を更新',
@@ -923,21 +743,19 @@ class _CatalogPageState extends State<CatalogPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(_status, style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 10),
+                  Text(_status),
+                  const SizedBox(height: 8),
                   if (_batch)
                     OutlinedButton.icon(
                       onPressed: _stop
                           ? null
-                          : () {
-                              setState(() => _stop = true);
-                            },
+                          : () => setState(() => _stop = true),
                       icon: const Icon(Icons.stop),
                       label: Text(_stop ? '現在の話の処理後に停止します' : '一括保存を停止'),
                     )
                   else
                     OutlinedButton.icon(
-                      onPressed: _locked || _episodes.isEmpty
+                      onPressed: _locked || _chapters.isEmpty
                           ? null
                           : _downloadAll,
                       icon: const Icon(Icons.download_for_offline),
@@ -948,76 +766,65 @@ class _CatalogPageState extends State<CatalogPage> {
             ),
             if (_locked) const LinearProgressIndicator(),
             Expanded(
-              child: _episodes.isEmpty && !_busy
-                  ? const Center(
-                      child: Text(
-                        '一覧がありません。\n右上の更新ボタンで取得してください。',
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _episodes.length,
-                      itemBuilder: (context, index) {
-                        final episode = _episodes[index];
-                        final saved = _saved.contains(episode.id);
+              child: ListView.builder(
+                itemCount: _chapters.length,
+                itemBuilder: (context, index) {
+                  final chapter = _chapters[index];
+                  final saved = _saved.contains(chapter.id);
 
-                        return ListTile(
-                          leading: Text(
-                            '${index + 1}',
-                            style: const TextStyle(color: Colors.white54),
-                          ),
-                          title: Text(episode.title),
-                          subtitle: Text(
-                            saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
-                            style: TextStyle(
-                              color: saved ? Colors.tealAccent : Colors.white54,
-                            ),
-                          ),
-                          onTap: _locked ? null : () => _open(episode),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (saved)
-                                const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: Icon(
-                                    Icons.offline_pin,
-                                    color: Colors.tealAccent,
-                                  ),
-                                )
-                              else
-                                IconButton(
-                                  tooltip: 'ダウンロード',
-                                  onPressed: _locked
-                                      ? null
-                                      : () => _download(episode),
-                                  icon: const Icon(Icons.download),
-                                ),
-                              PopupMenuButton<String>(
-                                enabled: !_locked,
-                                onSelected: (value) {
-                                  if (value == 'delete') {
-                                    _delete(episode);
-                                  } else {
-                                    _showCredits(episode);
-                                  }
-                                },
-                                itemBuilder: (_) => [
-                                  const PopupMenuItem(
-                                    value: 'credits',
-                                    child: Text('クレジット'),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Text('保存データを削除'),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+                  return ListTile(
+                    title: Text(chapter.title),
+                    subtitle: Text(
+                      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
+                      style: TextStyle(
+                        color: saved ? Colors.tealAccent : Colors.white54,
+                      ),
                     ),
+                    onTap: _locked ? null : () => _open(chapter),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (saved)
+                          const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Icon(
+                              Icons.offline_pin,
+                              color: Colors.tealAccent,
+                            ),
+                          )
+                        else
+                          IconButton(
+                            tooltip: 'ダウンロード',
+                            onPressed: _locked
+                                ? null
+                                : () => _download(chapter),
+                            icon: const Icon(Icons.download),
+                          ),
+                        PopupMenuButton<String>(
+                          enabled: !_locked,
+                          onSelected: (value) {
+                            if (value == 'delete') {
+                              _delete(chapter);
+                            } else {
+                              _credits(chapter);
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'credits',
+                              child: Text('クレジット'),
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Text('保存データを削除'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
           ],
         ),
