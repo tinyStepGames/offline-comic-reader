@@ -1,3 +1,4 @@
+import 'html_rule_lab_page.dart';
 import 'saved_downloads_page.dart';
 import 'chapter_read_state_widgets.dart';
 import 'services/chapter_read_state_store.dart';
@@ -229,6 +230,18 @@ class _SourceHomeState extends State<SourceHome> {
           backgroundColor: Colors.black,
           title: Text(title),
           actions: [
+            if (_section == 0)
+              IconButton(
+                tooltip: 'HTMLルール作成室',
+                onPressed: () {
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => HtmlRuleLabPage(store: widget.store),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.code),
+              ),
             if (_section == 1)
               TextButton.icon(
                 onPressed: () {
