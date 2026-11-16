@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'list_rule_lab_page.dart';
 import 'rule_browse_page.dart';
+import 'chapter_image_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
 import 'services/site_rule_store.dart';
@@ -118,6 +119,23 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
     if (mounted) await _load();
   }
 
+  Future<void> _editImages(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterImageLabPage(
+          initialUrl: site.images?.pageUrl ?? '',
+          initialAcquisition: site.images?.acquisition ?? 'staticHtml',
+          repository: _repository,
+          savedSite: site,
+        ),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
   Future<void> _browse(SavedSiteRule site) async {
     if (_busy) return;
     await Navigator.of(context).push<void>(
@@ -183,7 +201,7 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           title: const Text('サイト設定を削除'),
           content: Text(
             '「${site.name}」の保存設定を削除しますか？\n\n'
-            '作品一覧・チャプター一覧の設定が対象です。'
+            '作品一覧・チャプター一覧・本文画像の設定が対象です。'
             '保存画像・お気に入り・閲覧履歴は削除しません。',
           ),
           actions: [
@@ -263,11 +281,27 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           ),
           _slot(site, 'works', '作品一覧'),
           _slot(site, 'chapters', 'チャプター一覧'),
+          ListTile(
+            title: const Text('本文画像'),
+            subtitle: Text(
+              site.images == null
+                  ? '未設定・タップして設定'
+                  : '設定済み・タップして編集\n'
+                        '${site.images!.acquisition == 'renderedDom' ? '表示後HTML' : '通常HTML'}'
+                        ' ／ ${site.images!.rule.attribute}',
+            ),
+            leading: Icon(
+              site.images == null
+                  ? Icons.add_photo_alternate_outlined
+                  : Icons.check_circle_outline,
+            ),
+            onTap: _busy ? null : () => _editImages(site),
+          ),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
             child: Text(
-              '本文画像：未対応\n'
-              '通常HTMLの作品・チャプター一覧を取得できます。本文画像・読書機能は未接続です。',
+              '本文画像ルールの保存・再編集に対応しています。'
+              '読書画面とダウンロードへの接続は次の段階です。',
               style: TextStyle(color: Colors.white54),
             ),
           ),

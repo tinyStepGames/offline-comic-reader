@@ -6,6 +6,8 @@ import 'element_inspector_page.dart';
 import 'services/chapter_image_probe.dart';
 import 'services/chapter_image_rule.dart';
 import 'services/html_probe.dart';
+import 'services/site_rule_store.dart';
+import 'services/chapter_image_settings.dart';
 
 class ChapterImageLabPage extends StatefulWidget {
   const ChapterImageLabPage({
@@ -13,11 +15,15 @@ class ChapterImageLabPage extends StatefulWidget {
     required this.initialUrl,
     this.initialPage,
     this.initialAcquisition = 'staticHtml',
+    this.repository,
+    this.savedSite,
   });
 
   final String initialUrl;
   final HtmlProbePage? initialPage;
   final String initialAcquisition;
+  final SiteRuleStore? repository;
+  final SavedSiteRule? savedSite;
 
   @override
   State<ChapterImageLabPage> createState() => _ChapterImageLabPageState();
@@ -43,6 +49,21 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
     _url = TextEditingController(text: widget.initialUrl);
     _page = widget.initialPage;
     _acquisition = widget.initialAcquisition;
+
+    final saved = widget.savedSite?.images;
+    if (saved != null) {
+      _url.text = saved.pageUrl;
+      _selector.text = saved.rule.selector;
+      _attribute.text = saved.rule.attribute;
+      _acquisition = saved.acquisition;
+
+      // 前の画面から来たHTMLが保存設定のページとは限らないため破棄。
+      _page = null;
+      _status =
+          '保存した本文画像ルールを復元しました。'
+          'HTMLを取得し直してテストしてください。'
+          '保存方式は${saved.acquisition == 'renderedDom' ? '表示後HTML' : '通常HTML'}です。';
+    }
 
     if (_page != null) {
       _status =
@@ -193,6 +214,84 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
     }
   }
 
+  Future<void> _saveToSite() async {
+    final repository = widget.repository;
+    final site = widget.savedSite;
+    final page = _page;
+    final report = _report;
+
+    if (_busy ||
+        repository == null ||
+        site == null ||
+        page == null ||
+        report == null ||
+        !report.isUsable) {
+      return;
+    }
+
+    setState(() => _busy = true);
+
+    try {
+      final settings = ChapterImageSettings(
+        pageUrl: page.uri.toString(),
+        acquisition: _acquisition,
+        rule: ChapterImageRule(
+          selector: _selector.text.trim(),
+          attribute: _attribute.text.trim(),
+        ),
+      );
+
+      settings.validateOrigins(site.rules.values.map((rule) => rule.pageUrl));
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('本文画像ルールを保存'),
+          content: SingleChildScrollView(
+            child: Text(
+              '保存先：${site.name}\n'
+              '取得方式：${_acquisition == 'renderedDom' ? '表示後HTML' : '通常HTML'}\n'
+              '画像URL：${report.images.length}件\n\n'
+              '先頭・中央・最後が本文で、広告や抜けがないか確認しましたか？\n\n'
+              'URL抽出の成功だけでは全ページの完全性を保証できません。\n'
+              '同じサイトの別チャプターでも確認してください。\n\n'
+              '保存するのはサンプルURL・取得方式・セレクター・属性です。'
+              'HTML・画像・Cookieは保存しません。\n'
+              '今回はまだリーダーには接続しません。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('戻って確認'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('確認したので保存'),
+            ),
+          ],
+        ),
+      );
+
+      if (!mounted || confirmed != true) return;
+
+      await repository.saveImages(id: site.id, settings: settings);
+
+      if (!mounted) return;
+      setState(() {
+        _status =
+            '「${site.name}」に本文画像ルールを保存しました。'
+            'リーダーへの接続は次の段階です。';
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = 'サイトに保存できませんでした：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _copyRule() async {
     try {
       final rule = ChapterImageRule(
@@ -321,9 +420,14 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      'ここでは本文画像の抽出順と表示だけを確認します。'
-                      'リーダー接続・画像保存・サイトへの登録は行いません。',
+                    Text(
+                      widget.savedSite == null
+                          ? '本文画像の抽出順と表示を確認します。'
+                                'サイトへ保存する場合は、サイトルール管理の'
+                                '「本文画像」から開いてください。'
+                          : '保存先：${widget.savedSite!.name}\n'
+                                '抽出と画像表示を確認後、本文画像ルールを保存できます。'
+                                '今回はリーダー接続・画像保存は行いません。',
                       style: TextStyle(color: Colors.white60),
                     ),
                     const SizedBox(height: 16),
@@ -409,6 +513,17 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
                       const SizedBox(height: 12),
                     ],
                     SelectableText(_status),
+                    if (widget.repository != null &&
+                        widget.savedSite != null) ...[
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: !_busy && report?.isUsable == true
+                            ? _saveToSite
+                            : null,
+                        icon: const Icon(Icons.save_outlined),
+                        label: const Text('本文画像ルールをサイトに保存'),
+                      ),
+                    ],
                     if (report != null) ...[
                       const SizedBox(height: 12),
                       Text(

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:path/path.dart' as p;
 
 import 'list_extraction_rule.dart';
+import 'chapter_image_settings.dart';
 
 class SavedSiteRule {
   const SavedSiteRule({
@@ -12,23 +13,27 @@ class SavedSiteRule {
     required this.name,
     required this.rules,
     required this.updatedAt,
+    this.images,
   });
 
   final String id;
   final String name;
   final Map<String, ListExtractionRule> rules;
   final DateTime updatedAt;
+  final ChapterImageSettings? images;
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'rules': rules.map((key, rule) => MapEntry(key, rule.toJson())),
+    if (images != null) 'images': images!.toJson(),
   };
 
   factory SavedSiteRule.fromJson(Map<String, dynamic> data) {
     if (data.keys.any(
-      (key) => !const {'id', 'name', 'updatedAt', 'rules'}.contains(key),
+      (key) =>
+          !const {'id', 'name', 'updatedAt', 'rules', 'images'}.contains(key),
     )) {
       throw const FormatException('未対応のサイト保存項目です');
     }
@@ -53,11 +58,17 @@ class SavedSiteRule {
       rules[entry.key] = rule;
     }
 
+    final images = data['images'] == null
+        ? null
+        : ChapterImageSettings.parse(jsonEncode(data['images']));
+    images?.validateOrigins(rules.values.map((rule) => rule.pageUrl));
+
     return SavedSiteRule(
       id: id,
       name: name,
       rules: Map.unmodifiable(rules),
       updatedAt: updatedAt.toUtc(),
+      images: images,
     );
   }
 }
@@ -137,6 +148,12 @@ class SiteRuleStore {
       throw const FormatException('保存できるサイトは200件までです');
     }
 
+    for (final site in sites) {
+      site.images?.validateOrigins(
+        site.rules.values.map((rule) => rule.pageUrl),
+      );
+    }
+
     final text = jsonEncode({
       'version': 1,
       'sites': sites.map((site) => site.toJson()).toList(),
@@ -147,6 +164,14 @@ class SiteRuleStore {
     }
 
     await _file.parent.create(recursive: true);
+    // 初回の書き換え前に、既存の設定を一度だけ退避する。
+    if (await _file.exists()) {
+      final backup = File('${_file.path}.before-body-rules-v1.bak');
+      if (!await backup.exists()) {
+        await _file.copy(backup.path);
+      }
+    }
+
     final temporary = File('${_file.path}.part');
     await temporary.writeAsString(text, flush: true);
     await temporary.rename(_file.path);
@@ -189,6 +214,7 @@ class SiteRuleStore {
 
     final saved = SavedSiteRule(
       id: id ?? _newId(sites),
+      images: index >= 0 ? sites[index].images : null,
       name: checkedName,
       rules: Map.unmodifiable(rules),
       updatedAt: DateTime.now().toUtc(),
@@ -204,6 +230,30 @@ class SiteRuleStore {
     return saved;
   });
 
+  Future<SavedSiteRule> saveImages({
+    required String id,
+    required ChapterImageSettings settings,
+  }) => _locked(() async {
+    final checked = ChapterImageSettings.parse(settings.encodeJson());
+    final sites = await _read();
+    final index = _requiredIndex(sites, id);
+    final old = sites[index];
+
+    checked.validateOrigins(old.rules.values.map((rule) => rule.pageUrl));
+
+    final updated = SavedSiteRule(
+      id: old.id,
+      name: old.name,
+      rules: old.rules,
+      images: checked,
+      updatedAt: DateTime.now().toUtc(),
+    );
+
+    sites[index] = updated;
+    await _write(sites);
+    return updated;
+  });
+
   Future<void> rename(String id, String name) => _locked(() async {
     final checkedName = checkedSiteRuleName(name);
     final sites = await _read();
@@ -214,6 +264,7 @@ class SiteRuleStore {
       id: old.id,
       name: checkedName,
       rules: old.rules,
+      images: old.images,
       updatedAt: DateTime.now().toUtc(),
     );
     await _write(sites);

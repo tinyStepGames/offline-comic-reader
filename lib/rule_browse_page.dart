@@ -11,6 +11,7 @@ import 'services/rule_layout_store.dart';
 import 'services/page_url_template.dart';
 import 'services/work_page_details.dart';
 import 'work_details_panel.dart';
+import 'rule_online_reader_page.dart';
 
 class RuleBrowsePage extends StatefulWidget {
   const RuleBrowsePage({
@@ -209,6 +210,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   bool _collection = false;
+  bool _openingItem = false;
   bool _layoutReady = false;
   final _layoutStore = RuleLayoutStore();
 
@@ -428,62 +430,115 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   Future<void> _open(RuleBrowseItem item) async {
+    if (_busy || _openingItem) return;
+
     final url = item.url;
-    if (_busy || url == null) return;
-
-    if (_isWorks) {
-      if (!widget.site.rules.containsKey('chapters')) {
-        setState(() {
-          _status = 'チャプター一覧が未設定です。サイトルール管理で設定してください';
-        });
-        return;
-      }
-
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => RuleBrowsePage(
-            site: widget.site,
-            kind: 'chapters',
-            targetUrl: url.toString(),
-            workTitle: item.title,
-            workThumbnail: item.thumbnail,
-          ),
-        ),
-      );
-    } else {
-      await showModalBottomSheet<void>(
+    if (url == null) {
+      await showDialog<void>(
         context: context,
-        isScrollControlled: true,
-        builder: (_) => SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(item.title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 12),
-                const Text(
-                  '本文画像ルール・読書画面はまだ未接続です。'
-                  '今回はチャプターのリンク確認まで行えます。',
-                ),
-                const SizedBox(height: 12),
-                SelectableText(url.toString()),
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(text: url.toString()),
-                    );
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text('リンクをコピー'),
-                ),
-              ],
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('リンクを開けません'),
+          content: SingleChildScrollView(
+            child: Text(
+              item.issues.isEmpty
+                  ? 'URLが取得できていません。リンクの設定を確認してください。'
+                  : item.issues.join('\n'),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('閉じる'),
+            ),
+          ],
         ),
       );
+      return;
+    }
+
+    final missing = _isWorks
+        ? !widget.site.rules.containsKey('chapters')
+        : widget.site.images == null;
+
+    if (missing) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(_isWorks ? 'チャプター一覧が未設定です' : '本文画像が未設定です'),
+          content: const Text(
+            'サイトルール管理から対象サイトの設定を追加してください。'
+            'URLは下のボタンからコピーできます。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: url.toString()));
+              },
+              child: const Text('URLをコピー'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    _openingItem = true;
+
+    try {
+      if (_isWorks) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => RuleBrowsePage(
+              site: widget.site,
+              kind: 'chapters',
+              targetUrl: url.toString(),
+              workTitle: item.title,
+              workThumbnail: item.thumbnail,
+            ),
+          ),
+        );
+      } else {
+        // 画面上の並び順をスナップショットとして渡す。
+        // リンク不正・同じURLの重複項目は前後移動から除外する。
+        final seen = <String>{};
+        final chapters = _visibleItems.where((chapter) {
+          final chapterUrl = chapter.url;
+          if (chapterUrl == null) return false;
+          return seen.add(chapterUrl.removeFragment().toString());
+        }).toList();
+
+        final selectedUrl = url.removeFragment().toString();
+        final selectedIndex = chapters.indexWhere(
+          (chapter) => chapter.url!.removeFragment().toString() == selectedUrl,
+        );
+
+        if (selectedIndex < 0) {
+          throw StateError('選択したチャプターが一覧に見つかりません');
+        }
+
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => RuleOnlineReaderPage(
+              site: widget.site,
+              chapters: List.unmodifiable(chapters),
+              initialIndex: selectedIndex,
+              workThumbnail: widget.workThumbnail,
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('画面を開けませんでした：$error')));
+      }
+    } finally {
+      _openingItem = false;
     }
   }
 
