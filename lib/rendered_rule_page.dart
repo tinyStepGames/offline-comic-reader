@@ -18,12 +18,18 @@ class RenderedRulePage extends StatefulWidget {
     required this.allowedOrigin,
     required this.groupSelector,
     required this.cancelToken,
+    this.backgroundMode = false,
+    this.previewTitle = '',
+    this.previewThumbnail,
   });
 
   final String url;
   final String allowedOrigin;
   final String groupSelector;
   final CancelToken cancelToken;
+  final bool backgroundMode;
+  final String previewTitle;
+  final Uri? previewThumbnail;
 
   @override
   State<RenderedRulePage> createState() => _RenderedRulePageState();
@@ -35,6 +41,7 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
   Timer? _timer;
   Uri? _initial;
   bool _prepared = false;
+  bool _showBrowser = false;
   bool _polling = false;
   bool _capturing = false;
   bool _finished = false;
@@ -280,7 +287,98 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildBrowser(context),
+        if (widget.backgroundMode && !_showBrowser)
+          Positioned.fill(
+            child: Scaffold(
+              backgroundColor: Colors.black,
+              appBar: AppBar(
+                title: Text(
+                  widget.previewTitle.isEmpty
+                      ? '一覧を読み込み中'
+                      : widget.previewTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              body: SafeArea(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (widget.previewThumbnail != null) ...[
+                        Center(
+                          child: SizedBox(
+                            width: 220,
+                            height: 320,
+                            child: Image.network(
+                              widget.previewThumbnail.toString(),
+                              fit: BoxFit.contain,
+                              cacheWidth: 660,
+                              errorBuilder: (_, error, stack) => const Center(
+                                child: Icon(
+                                  Icons.broken_image_outlined,
+                                  size: 48,
+                                  color: Colors.white38,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      if (widget.previewTitle.isNotEmpty) ...[
+                        Text(
+                          widget.previewTitle,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (_auto || _capturing) ...[
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '一覧を読み込んでいます…',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ] else ...[
+                        Text(
+                          _status,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'ページ上の操作が必要な場合は、下のボタンから表示できます。',
+                          style: TextStyle(color: Colors.white54, fontSize: 12),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _capturing
+                              ? null
+                              : () => setState(() => _showBrowser = true),
+                          icon: const Icon(Icons.open_in_browser),
+                          label: const Text('ページを表示して操作'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildBrowser(BuildContext context) => Scaffold(
     backgroundColor: Colors.black,
     appBar: AppBar(title: const Text('ページを表示して一覧を取得')),
     body: SafeArea(

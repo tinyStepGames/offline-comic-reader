@@ -7,6 +7,7 @@ import 'services/html_probe.dart';
 import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
 import 'services/site_rule_store.dart';
+import 'services/rule_layout_store.dart';
 import 'services/work_page_details.dart';
 import 'work_details_panel.dart';
 
@@ -39,6 +40,39 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   int _generation = 0;
 
   bool _collection = false;
+  bool _layoutReady = false;
+  final _layoutStore = RuleLayoutStore();
+
+  Future<void> _restoreLayout() async {
+    if (_layoutReady) return;
+
+    final collection = _isWorks
+        ? await _layoutStore.read(widget.site.id)
+        : false;
+
+    if (!mounted) return;
+    setState(() {
+      _collection = collection;
+      _layoutReady = true;
+    });
+  }
+
+  Future<void> _toggleLayout() async {
+    if (!_layoutReady) return;
+
+    final collection = !_collection;
+    setState(() => _collection = collection);
+
+    try {
+      await _layoutStore.write(widget.site.id, collection);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('表示形式を保存できませんでした。次回は元の表示に戻る場合があります。')),
+      );
+    }
+  }
+
   ChapterListOrder _chapterOrder = ChapterListOrder.source;
 
   List<RuleBrowseItem> get _visibleItems => _isWorks
@@ -51,9 +85,6 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
 
   Widget _workSection() {
     final details = _result!.workDetails;
-    final hasNumbers = _result!.items.any(
-      (item) => parseChapterNumber(item.chapterNumber) != null,
-    );
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -68,48 +99,34 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           const SizedBox(height: 16),
           const Divider(),
           const SizedBox(height: 8),
-          DropdownButtonFormField<ChapterListOrder>(
-            initialValue: _chapterOrder,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'チャプターの並び順',
-              border: OutlineInputBorder(),
-            ),
-            items: [
-              const DropdownMenuItem(
-                value: ChapterListOrder.source,
-                child: Text('サイト順'),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'チャプターの並び順',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
-              const DropdownMenuItem(
-                value: ChapterListOrder.reverse,
-                child: Text('サイト順の逆順'),
+              Text(
+                _chapterOrder == ChapterListOrder.reverse ? '降順' : '昇順',
+                style: const TextStyle(color: Colors.white70),
               ),
-              DropdownMenuItem(
-                value: ChapterListOrder.ascending,
-                enabled: hasNumbers,
-                child: const Text('話数の昇順'),
-              ),
-              DropdownMenuItem(
-                value: ChapterListOrder.descending,
-                enabled: hasNumbers,
-                child: const Text('話数の降順'),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: _chapterOrder == ChapterListOrder.reverse
+                    ? '昇順に切り替え'
+                    : '降順に切り替え',
+                onPressed: () {
+                  setState(() {
+                    _chapterOrder = _chapterOrder == ChapterListOrder.reverse
+                        ? ChapterListOrder.source
+                        : ChapterListOrder.reverse;
+                  });
+                },
+                icon: const Icon(Icons.swap_vert),
               ),
             ],
-            onChanged: (value) {
-              if (value != null) {
-                setState(() => _chapterOrder = value);
-              }
-            },
           ),
-          if (!hasNumbers)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                '数値順を使う場合は、サイトルールの'
-                '「作品詳細・並び替え」で話数を設定してください。',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-            ),
         ],
       ),
     );
@@ -151,6 +168,9 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     final page = await Navigator.of(context).push<HtmlProbePage>(
       MaterialPageRoute<HtmlProbePage>(
         builder: (_) => RenderedRulePage(
+          backgroundMode: true,
+          previewTitle: widget.workTitle ?? widget.site.name,
+          previewThumbnail: widget.workThumbnail,
           url: input,
           allowedOrigin: allowedOrigin,
           groupSelector: groupSelector,
@@ -166,6 +186,8 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   Future<void> _load() async {
+    await _restoreLayout();
+    if (!mounted) return;
     final generation = ++_generation;
     _cancel?.cancel('再取得');
     final cancel = CancelToken();
@@ -394,9 +416,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         if (_isWorks)
           IconButton(
             tooltip: _collection ? 'Table表示に切り替え' : 'Collection表示に切り替え',
-            onPressed: () => setState(() {
-              _collection = !_collection;
-            }),
+            onPressed: _layoutReady ? _toggleLayout : null,
             icon: Icon(
               _collection ? Icons.view_list_outlined : Icons.grid_view_outlined,
             ),
