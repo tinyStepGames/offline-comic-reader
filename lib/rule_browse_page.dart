@@ -10,8 +10,12 @@ import 'services/site_rule_store.dart';
 import 'services/rule_layout_store.dart';
 import 'services/page_url_template.dart';
 import 'services/work_page_details.dart';
+import 'services/chapter_reading_order.dart';
 import 'work_details_panel.dart';
 import 'rule_online_reader_page.dart';
+import 'rule_download_button.dart';
+import 'rule_saved_downloads_page.dart';
+import 'services/rule_downloads.dart';
 
 class RuleBrowsePage extends StatefulWidget {
   const RuleBrowsePage({
@@ -502,14 +506,19 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           ),
         );
       } else {
-        // 画面上の並び順をスナップショットとして渡す。
+        // 一覧の表示順に依存しない、話数順のスナップショットを渡す。
         // リンク不正・同じURLの重複項目は前後移動から除外する。
         final seen = <String>{};
-        final chapters = _visibleItems.where((chapter) {
-          final chapterUrl = chapter.url;
-          if (chapterUrl == null) return false;
-          return seen.add(chapterUrl.removeFragment().toString());
-        }).toList();
+        final chapters =
+            chapterReadingOrder<RuleBrowseItem>(
+              _result?.items ?? const <RuleBrowseItem>[],
+              titleOf: (chapter) => chapter.title,
+              explicitNumberOf: (chapter) => chapter.chapterNumber,
+            ).where((chapter) {
+              final chapterUrl = chapter.url;
+              if (chapterUrl == null) return false;
+              return seen.add(chapterUrl.removeFragment().toString());
+            }).toList();
 
         final selectedUrl = url.removeFragment().toString();
         final selectedIndex = chapters.indexWhere(
@@ -613,13 +622,27 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
               ),
             ),
             const SizedBox(width: 8),
-            Icon(
-              item.url == null
-                  ? Icons.warning_amber_outlined
-                  : _isWorks
-                  ? Icons.chevron_right
-                  : Icons.link,
-            ),
+            if (!_isWorks && item.url != null && widget.targetUrl != null)
+              RuleDownloadButton(
+                site: widget.site,
+                chapter: ruleSavedChapter(
+                  siteId: widget.site.id,
+                  workUrl: widget.targetUrl!,
+                  chapterUrl: item.url!.toString(),
+                  title: item.title,
+                  publishedDateText: item.date,
+                ),
+                workTitle: widget.workTitle ?? '',
+                renderedFetcher: _fetchRendered,
+              )
+            else
+              Icon(
+                item.url == null
+                    ? Icons.warning_amber_outlined
+                    : _isWorks
+                    ? Icons.chevron_right
+                    : Icons.link,
+              ),
           ],
         ),
       ),
@@ -667,6 +690,17 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     appBar: AppBar(
       title: Text(_isWorks ? widget.site.name : widget.workTitle ?? 'チャプター一覧'),
       actions: [
+        IconButton(
+          tooltip: '保存済みを開く',
+          onPressed: () {
+            Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => RuleSavedDownloadsPage(site: widget.site),
+              ),
+            );
+          },
+          icon: const Icon(Icons.folder_outlined),
+        ),
         if (_isWorks)
           IconButton(
             tooltip: _collection ? 'Table表示に切り替え' : 'Collection表示に切り替え',

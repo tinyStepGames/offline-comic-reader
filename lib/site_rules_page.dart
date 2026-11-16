@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'list_rule_lab_page.dart';
 import 'rule_browse_page.dart';
+import 'rule_saved_downloads_page.dart';
 import 'chapter_image_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
@@ -279,6 +280,20 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
               label: const Text('作品一覧を開く'),
             ),
           ),
+          ListTile(
+            leading: const Icon(Icons.folder_outlined),
+            title: const Text('保存済みを開く'),
+            subtitle: const Text('通信せずに保存した話を読みます'),
+            onTap: _busy
+                ? null
+                : () {
+                    Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => RuleSavedDownloadsPage(site: site),
+                      ),
+                    );
+                  },
+          ),
           _slot(site, 'works', '作品一覧'),
           _slot(site, 'chapters', 'チャプター一覧'),
           ListTile(
@@ -300,8 +315,8 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
             child: Text(
-              '本文画像ルールの保存・再編集に対応しています。'
-              '読書画面とダウンロードへの接続は次の段階です。',
+              'チャプター一覧から読書・ダウンロードできます。'
+              '保存済みの話は通信せずに開けます。',
               style: TextStyle(color: Colors.white54),
             ),
           ),

@@ -9,6 +9,7 @@ import 'rendered_rule_page.dart';
 import 'services/html_probe.dart';
 import 'services/rule_browse_client.dart';
 import 'services/rule_content_client.dart';
+import 'services/rule_downloads.dart';
 import 'services/site_rule_store.dart';
 
 class RuleOnlineReaderPage extends StatefulWidget {
@@ -38,6 +39,7 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
   CancelToken? _cancel;
   late int _index;
   List<Uri> _images = [];
+  List<File> _files = [];
   bool _loading = false;
   bool _opened = false;
   bool _waitingControls = false;
@@ -111,18 +113,38 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
     });
 
     try {
-      final images = await _client.load(
-        site: widget.site,
-        chapterUrl: url.toString(),
-        cancelToken: token,
-        renderedFetcher: _fetchRendered,
+      final downloads = await RuleDownloads.open();
+      if (!mounted || token.isCancelled) return;
+
+      // 保存IDはサイトIDとチャプターURLで決まる。
+      // 作品URLを知らない読書画面からも同じ保存を参照できる。
+      final local = await downloads.files(
+        ruleSavedChapter(
+          siteId: widget.site.id,
+          workUrl: url.toString(),
+          chapterUrl: url.toString(),
+          title: chapter.title,
+        ),
       );
+
+      if (!mounted || token.isCancelled) return;
+
+      // 保存済みならHTML取得も画像通信も行わない。
+      final images = local.isNotEmpty
+          ? const <Uri>[]
+          : await _client.load(
+              site: widget.site,
+              chapterUrl: url.toString(),
+              cancelToken: token,
+              renderedFetcher: _fetchRendered,
+            );
 
       if (!mounted || token.isCancelled) return;
 
       setState(() {
         _index = target;
         _images = images;
+        _files = local;
         _opened = true;
       });
     } catch (error) {
@@ -226,7 +248,7 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
           absorbing: _loading,
           child: ReaderPage(
             key: ValueKey('${widget.site.id}:$chapterUrl'),
-            files: const <File>[],
+            files: _files,
             imageUrls: _images,
             title: chapter.title,
             progressKey: ReadingKey(
