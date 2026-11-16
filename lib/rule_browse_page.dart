@@ -2,6 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'rendered_rule_page.dart';
+import 'services/html_probe.dart';
+import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
 import 'services/site_rule_store.dart';
 
@@ -31,12 +34,41 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   String _status = '取得準備中';
   int _generation = 0;
 
+  bool _collection = false;
+
   bool get _isWorks => widget.kind == 'works';
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  Future<HtmlProbePage> _fetchRendered(
+    String input, {
+    required CancelToken cancelToken,
+    required String allowedOrigin,
+    required String groupSelector,
+  }) async {
+    if (!mounted || cancelToken.isCancelled) {
+      throw StateError('取得を中止しました');
+    }
+
+    final page = await Navigator.of(context).push<HtmlProbePage>(
+      MaterialPageRoute<HtmlProbePage>(
+        builder: (_) => RenderedRulePage(
+          url: input,
+          allowedOrigin: allowedOrigin,
+          groupSelector: groupSelector,
+          cancelToken: cancelToken,
+        ),
+      ),
+    );
+
+    if (page == null || cancelToken.isCancelled) {
+      throw StateError('表示後HTMLの取得を中止しました');
+    }
+    return page;
   }
 
   Future<void> _load() async {
@@ -48,7 +80,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     setState(() {
       _busy = true;
       _result = null;
-      _status = '通常HTMLから${_isWorks ? '作品' : 'チャプター'}一覧を取得中';
+      _status = '${_isWorks ? '作品' : 'チャプター'}一覧を取得中';
     });
 
     try {
@@ -57,13 +89,12 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         kind: widget.kind,
         targetUrl: widget.targetUrl,
         cancelToken: cancel,
+        renderedFetcher: _fetchRendered,
       );
 
       if (!mounted || generation != _generation || cancel.isCancelled) return;
 
-      final warningRows = result.items
-          .where((item) => item.issues.isNotEmpty)
-          .length;
+      final warningRows = result.items.where((item) => item.url == null).length;
 
       setState(() {
         _result = result;
@@ -196,7 +227,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
                       style: const TextStyle(color: Colors.white60),
                     ),
                   ],
-                  if (item.issues.isNotEmpty) ...[
+                  if (item.url == null && item.issues.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
                       item.issues.join('\n'),
@@ -225,37 +256,31 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     ),
   );
 
-  Widget _header() => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          height: 3,
-          child: _busy ? const LinearProgressIndicator() : null,
-        ),
-        const SizedBox(height: 12),
-        SelectableText(
-          _status,
-          style: const TextStyle(color: Colors.tealAccent),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          _isWorks
-              ? '作品を選ぶと、そのURLからチャプター一覧を取得します。'
-              : 'チャプターを選ぶとリンクを確認できます。本文表示は未接続です。',
-          style: const TextStyle(color: Colors.white60),
-        ),
-        if (_result != null) ...[
-          const SizedBox(height: 8),
-          SelectableText(
-            '取得URL：${_result!.pageUri}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
-          ),
-        ],
-      ],
-    ),
-  );
+  Widget _header() {
+    if (_busy) {
+      return const Padding(
+        padding: EdgeInsets.only(bottom: 12),
+        child: SizedBox(height: 3, child: LinearProgressIndicator()),
+      );
+    }
+
+    // 正常に一覧を表示できた場合、件数・取得URL・説明は表示しない。
+    // 一覧を表示できない場合や、後から操作エラーになった場合は案内を残す。
+    final hasItems = _result?.items.isNotEmpty ?? false;
+    final normalResult = _status.contains('件を取得しました');
+
+    if (hasItems && normalResult) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: SelectableText(
+        _status,
+        style: const TextStyle(color: Colors.white70),
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -271,6 +296,16 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     appBar: AppBar(
       title: Text(_isWorks ? widget.site.name : widget.workTitle ?? 'チャプター一覧'),
       actions: [
+        if (_isWorks)
+          IconButton(
+            tooltip: _collection ? 'Table表示に切り替え' : 'Collection表示に切り替え',
+            onPressed: () => setState(() {
+              _collection = !_collection;
+            }),
+            icon: Icon(
+              _collection ? Icons.view_list_outlined : Icons.grid_view_outlined,
+            ),
+          ),
         IconButton(
           tooltip: '再読み込み',
           onPressed: _busy ? null : _load,
@@ -279,11 +314,36 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
       ],
     ),
     body: SafeArea(
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: 1 + (_result?.items.length ?? 0),
-        itemBuilder: (_, index) =>
-            index == 0 ? _header() : _item(_result!.items[index - 1]),
+      child: CustomScrollView(
+        key: PageStorageKey<String>(
+          '${widget.site.id}:${widget.kind}:'
+          '${widget.targetUrl ?? ''}:'
+          '${_isWorks && _collection ? 'collection' : 'table'}',
+        ),
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            sliver: SliverToBoxAdapter(child: _header()),
+          ),
+          if (_isWorks && _collection)
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+              sliver: RuleCollectionSliver(
+                items: _result?.items ?? const <RuleBrowseItem>[],
+                onOpen: _open,
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, index) => _item(_result!.items[index]),
+                  childCount: _result?.items.length ?? 0,
+                ),
+              ),
+            ),
+        ],
       ),
     ),
   );

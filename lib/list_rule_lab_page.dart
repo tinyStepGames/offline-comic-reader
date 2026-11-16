@@ -211,7 +211,11 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     });
 
     try {
-      final report = await extractListRowsSafely(page, _rule());
+      final report = await extractListRowsSafely(
+        page,
+        _rule(),
+        collectCandidates: true,
+      );
       if (!mounted) return;
 
       setState(() {
@@ -558,6 +562,49 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
                   '${listFieldLabels[entry.key]}：'
                   '${entry.value.isEmpty ? '（空）' : entry.value}',
                 ),
+              ),
+            if (row.matchCounts.isNotEmpty)
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('一致候補・採用結果を確認'),
+                subtitle: const Text('候補は加工前の値です。先頭を採用後、整形・URL解決を行います。'),
+                children: [
+                  for (final entry in row.matchCounts.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '${listFieldLabels[entry.key]}：${entry.value}件一致',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 6),
+                          for (
+                            var i = 0;
+                            i < (row.candidates[entry.key]?.length ?? 0);
+                            i++
+                          )
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: SelectableText(
+                                '${i == 0 ? '✓ 採用候補' : '候補'} ${i + 1}：'
+                                '${row.candidates[entry.key]![i].isEmpty ? '（空）' : row.candidates[entry.key]![i]}',
+                              ),
+                            ),
+                          if (entry.value > 50) const Text('候補は先頭50件まで表示しています'),
+                          if (entry.value == 0) const Text('一致する要素がありません'),
+                          const SizedBox(height: 6),
+                          SelectableText(
+                            '最終結果：'
+                            '${(values[entry.key] ?? '').isEmpty ? '（空）' : values[entry.key]}',
+                            style: const TextStyle(color: Colors.tealAccent),
+                          ),
+                          const Divider(),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             for (final issue in row.issues)
               Text(issue, style: const TextStyle(color: Colors.orangeAccent)),

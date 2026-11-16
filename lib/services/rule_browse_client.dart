@@ -11,6 +11,14 @@ typedef RulePageFetcher =
       required String allowedOrigin,
     });
 
+typedef RenderedRulePageFetcher =
+    Future<HtmlProbePage> Function(
+      String input, {
+      required CancelToken cancelToken,
+      required String allowedOrigin,
+      required String groupSelector,
+    });
+
 class RuleBrowseItem {
   const RuleBrowseItem({
     required this.title,
@@ -58,6 +66,7 @@ class RuleBrowseClient {
     required String kind,
     required CancelToken cancelToken,
     String? targetUrl,
+    RenderedRulePageFetcher? renderedFetcher,
   }) async {
     _checkCancelled(cancelToken);
 
@@ -77,12 +86,8 @@ class RuleBrowseClient {
     if (template.kind != kind) {
       throw const FormatException('保存先と一覧ルールの種類が一致しません');
     }
-    if (template.acquisition != 'staticHtml') {
-      throw const FormatException(
-        'この設定は「ページを表示して取得」の方式です。'
-        '今回の自動取得は通常HTMLのみ対応しています。'
-        '通常HTMLで取得できる場合は、編集画面で通常HTML取得後に保存し直してください',
-      );
+    if (template.acquisition == 'renderedDom' && renderedFetcher == null) {
+      throw const FormatException('表示後HTMLの取得画面が接続されていません');
     }
 
     if (kind == 'chapters' && (targetUrl == null || targetUrl.trim().isEmpty)) {
@@ -99,7 +104,14 @@ class RuleBrowseClient {
       );
     }
 
-    final page = _fetcher == null
+    final page = template.acquisition == 'renderedDom'
+        ? await renderedFetcher!(
+            target.toString(),
+            cancelToken: cancelToken,
+            allowedOrigin: target.origin,
+            groupSelector: template.groupSelector,
+          )
+        : _fetcher == null
         ? await _client.fetch(
             target.toString(),
             cancelToken: cancelToken,

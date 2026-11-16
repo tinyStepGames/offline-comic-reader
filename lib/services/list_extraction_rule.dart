@@ -277,10 +277,19 @@ class ListExtractionRule {
 }
 
 class ExtractedListRow {
-  const ExtractedListRow(this.values, this.issues);
+  const ExtractedListRow(
+    this.values,
+    this.issues, [
+    this.candidates = const <String, List<String>>{},
+    this.matchCounts = const <String, int>{},
+  ]);
 
   final Map<String, String> values;
   final List<String> issues;
+
+  /// 設定画面用。加工前の文字列または属性値。各項目先頭50件まで。
+  final Map<String, List<String>> candidates;
+  final Map<String, int> matchCounts;
 }
 
 class ListExtractionReport {
@@ -305,6 +314,7 @@ ListExtractionReport extractListRows(
   HtmlProbePage page,
   ListExtractionRule rule, {
   int maxRows = 100,
+  bool collectCandidates = false,
 }) {
   if (maxRows < 1 || maxRows > 5000) {
     throw const FormatException('抽出件数は1～5000件で指定してください');
@@ -332,6 +342,8 @@ ListExtractionReport extractListRows(
   for (final group in groups.take(maxRows)) {
     final values = <String, String>{};
     final issues = <String>[];
+    final candidates = <String, List<String>>{};
+    final matchCounts = <String, int>{};
 
     for (final entry in rule.fields.entries) {
       final key = entry.key;
@@ -339,20 +351,30 @@ ListExtractionReport extractListRows(
       if (!field.enabled) continue;
 
       try {
-        Element? element;
+        final matches = field.selector.trim().isEmpty
+            ? <Element>[group]
+            : group.querySelectorAll(field.selector);
+        final element = matches.isEmpty ? null : matches.first;
 
-        if (field.selector.trim().isEmpty) {
-          element = group;
-        } else {
-          // まとまりの外側を拾わないよう、候補を内側に限定する。
-          final matches = group.querySelectorAll(field.selector);
-          element = matches.isEmpty ? null : matches.first;
-
-          if (matches.length > 1) {
-            issues.add('${listFieldLabels[key]}：${matches.length}件あるため先頭を使用');
-          }
+        if (matches.length > 1) {
+          issues.add('${listFieldLabels[key]}：${matches.length}件あるため先頭を使用');
         }
 
+        if (collectCandidates) {
+          matchCounts[key] = matches.length;
+          candidates[key] = List<String>.unmodifiable(
+            matches.take(50).map((candidate) {
+              final raw = field.mode == ListValueMode.text
+                  ? candidate.text.trim()
+                  : candidate.attributes[field.attribute] ?? '';
+
+              // 詳細プレビュー用。極端に長い値を全件保持しない。
+              return raw.length > 2000
+                  ? '${raw.substring(0, 2000)}…（以降省略）'
+                  : raw;
+            }),
+          );
+        }
         var value = element == null
             ? ''
             : field.mode == ListValueMode.text
@@ -395,7 +417,12 @@ ListExtractionReport extractListRows(
     }
 
     rows.add(
-      ExtractedListRow(Map.unmodifiable(values), List.unmodifiable(issues)),
+      ExtractedListRow(
+        Map.unmodifiable(values),
+        List.unmodifiable(issues),
+        Map.unmodifiable(candidates),
+        Map.unmodifiable(matchCounts),
+      ),
     );
   }
 
@@ -411,6 +438,7 @@ Future<ListExtractionReport> extractListRowsSafely(
   ListExtractionRule rule, {
   int maxRows = 100,
   Duration timeout = const Duration(seconds: 3),
+  bool collectCandidates = false,
 }) async {
   final port = ReceivePort();
   final result = Completer<ListExtractionReport>();
@@ -436,7 +464,7 @@ Future<ListExtractionReport> extractListRowsSafely(
   try {
     worker = await Isolate.spawn<List<Object?>>(
       _listExtractionWorker,
-      <Object?>[port.sendPort, page, rule, maxRows],
+      <Object?>[port.sendPort, page, rule, maxRows, collectCandidates],
       onError: port.sendPort,
       onExit: port.sendPort,
       errorsAreFatal: true,
@@ -463,6 +491,7 @@ void _listExtractionWorker(List<Object?> input) {
       input[1] as HtmlProbePage,
       input[2] as ListExtractionRule,
       maxRows: input[3] as int,
+      collectCandidates: input[4] as bool,
     );
     port.send(<Object?>['ok', report]);
   } catch (error) {
