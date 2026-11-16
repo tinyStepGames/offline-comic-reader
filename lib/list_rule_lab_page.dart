@@ -40,6 +40,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
   late final TextEditingController _url;
   late final TextEditingController _group;
+  late final TextEditingController _paginationUrl;
   late final TextEditingController _siteName;
   String? _savedSiteId;
   final _client = HtmlProbeClient();
@@ -60,6 +61,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     super.initState();
     _url = TextEditingController(text: widget.initialUrl);
     _group = TextEditingController(text: widget.initialSelector);
+    _paginationUrl = TextEditingController();
     _page = widget.initialPage;
     _acquisition = widget.initialAcquisition;
     _savedSiteId = widget.savedSite?.id;
@@ -73,6 +75,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     if (initial != null) {
       _url.text = initial.pageUrl;
       _group.text = initial.groupSelector;
+      _paginationUrl.text = initial.paginationUrl;
       _kind = initial.kind;
       _acquisition = initial.acquisition;
       _fields = Map.of(initial.fields);
@@ -85,6 +88,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
   ListExtractionRule _rule() => ListExtractionRule(
     pageUrl: _url.text.trim(),
     groupSelector: _group.text.trim(),
+    paginationUrl: _kind == 'works' ? _paginationUrl.text.trim() : '',
     fields: Map.of(_fields),
     details: Map.of(_details),
     kind: _kind,
@@ -363,6 +367,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       if (!samePage) _page = null;
       _url.text = rule.pageUrl;
       _group.text = rule.groupSelector;
+      _paginationUrl.text = rule.paginationUrl;
       _kind = rule.kind;
       _acquisition = rule.acquisition;
       _fields = Map.of(rule.fields);
@@ -648,6 +653,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     _client.close();
     _url.dispose();
     _group.dispose();
+    _paginationUrl.dispose();
     _siteName.dispose();
     super.dispose();
   }
@@ -708,10 +714,31 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
               enabled: !_busy,
               decoration: const InputDecoration(
                 labelText: '対象URL',
+                helperText: '要素選択・テスト用の実際に開けるURLを指定します。',
+                helperMaxLines: 2,
                 border: OutlineInputBorder(),
               ),
               onChanged: (_) => _invalidate(),
             ),
+            if (_kind == 'works') ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _paginationUrl,
+                enabled: !_busy,
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: const InputDecoration(
+                  labelText: 'ページ送りURL（任意）',
+                  hintText: 'https://example.com/list?page={page;1}',
+                  helperText:
+                      '空欄＝ページ送りなし。{page;1}＝1から、{page;0}＝0から開始。\n'
+                      '対象URLと同じ取得元を指定し、「サイトに保存」で確定します。',
+                  helperMaxLines: 4,
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => _invalidate(),
+              ),
+            ],
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,

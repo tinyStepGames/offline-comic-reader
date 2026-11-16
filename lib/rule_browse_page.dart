@@ -8,6 +8,7 @@ import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
 import 'services/site_rule_store.dart';
 import 'services/rule_layout_store.dart';
+import 'services/page_url_template.dart';
 import 'services/work_page_details.dart';
 import 'work_details_panel.dart';
 
@@ -38,6 +39,174 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   bool _busy = true;
   String _status = '取得準備中';
   int _generation = 0;
+  final _scrollController = ScrollController();
+  bool _moreBusy = false;
+  bool _hasMore = false;
+  int _lastPage = 0;
+  int _pagesLoaded = 0;
+  String _moreError = '';
+  String _pagingEnd = '';
+
+  PageUrlTemplate? get _pagination {
+    if (!_isWorks) return null;
+    final value = widget.site.rules['works']?.paginationUrl ?? '';
+    return value.isEmpty ? null : PageUrlTemplate(value);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients ||
+        !_scrollController.position.isScrollingNotifier.value ||
+        ModalRoute.of(context)?.isCurrent != true ||
+        widget.site.rules['works']?.acquisition != 'staticHtml' ||
+        _moreError.isNotEmpty) {
+      return;
+    }
+
+    final position = _scrollController.position;
+    if (position.maxScrollExtent > 0 && position.extentAfter < 350) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadMore() async {
+    final pagination = _pagination;
+    final current = _result;
+    final cancel = _cancel;
+
+    if (pagination == null ||
+        current == null ||
+        cancel == null ||
+        cancel.isCancelled ||
+        _busy ||
+        _moreBusy ||
+        !_hasMore ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+
+    final generation = _generation;
+    final nextPage = _lastPage + 1;
+
+    setState(() {
+      _moreBusy = true;
+      _moreError = '';
+    });
+
+    try {
+      final next = await _client.load(
+        site: widget.site,
+        kind: 'works',
+        pageNumber: nextPage,
+        cancelToken: cancel,
+        renderedFetcher: _fetchRendered,
+      );
+
+      if (!mounted || generation != _generation || cancel.isCancelled) {
+        return;
+      }
+
+      // ページ間で重複する作品URLは追加しない。
+      // 追加ページのリンク不正項目は採用しない。
+      final seen = current.items
+          .where((item) => item.url != null)
+          .map((item) => item.url!.removeFragment().toString())
+          .toSet();
+
+      final added = <RuleBrowseItem>[];
+      for (final item in next.items) {
+        final url = item.url;
+        if (url == null) continue;
+        if (seen.add(url.removeFragment().toString())) {
+          added.add(item);
+        }
+      }
+
+      final available = 10000 - current.items.length;
+      final accepted = available > 0
+          ? added.take(available).toList()
+          : <RuleBrowseItem>[];
+      final merged = [...current.items, ...accepted];
+
+      setState(() {
+        _lastPage = nextPage;
+        _pagesLoaded++;
+        _result = RuleBrowseResult(
+          pageUri: current.pageUri,
+          total: merged.length,
+          items: List.unmodifiable(merged),
+          workDetails: current.workDetails,
+        );
+
+        _hasMore =
+            accepted.isNotEmpty &&
+            _pagesLoaded < 100 &&
+            merged.length < 10000 &&
+            nextPage < PageUrlTemplate.maxPage;
+
+        if (next.total == 0) {
+          _pagingEnd = '次のページに作品が見つかりませんでした。';
+        } else if (accepted.isEmpty) {
+          _pagingEnd = '新しい作品がなかったため、追加取得を停止しました。';
+        } else if (!_hasMore) {
+          _pagingEnd = '今回の閲覧での取得上限に達しました。';
+        }
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation || cancel.isCancelled) {
+        return;
+      }
+      setState(() {
+        _moreError = '次のページを取得できませんでした：$error';
+      });
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() => _moreBusy = false);
+      }
+    }
+  }
+
+  Widget _pagingFooter() {
+    if (!_isWorks || _pagination == null || _busy || _result == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      child: Column(
+        children: [
+          if (_moreBusy)
+            const SizedBox(
+              height: 56,
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else if (_hasMore) ...[
+            if (_moreError.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _moreError,
+                  style: const TextStyle(color: Colors.orangeAccent),
+                ),
+              ),
+            OutlinedButton.icon(
+              onPressed: _loadMore,
+              icon: Icon(
+                _moreError.isEmpty ? Icons.expand_more : Icons.refresh,
+              ),
+              label: Text(_moreError.isEmpty ? '続きを読む' : '再試行'),
+            ),
+          ] else if (_pagingEnd.isNotEmpty)
+            Text(_pagingEnd, style: const TextStyle(color: Colors.white54)),
+        ],
+      ),
+    );
+  }
 
   bool _collection = false;
   bool _layoutReady = false;
@@ -137,6 +306,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -188,6 +358,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   Future<void> _load() async {
     await _restoreLayout();
     if (!mounted) return;
+
     final generation = ++_generation;
     _cancel?.cancel('再取得');
     final cancel = CancelToken();
@@ -195,11 +366,17 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
 
     setState(() {
       _busy = true;
+      _moreBusy = false;
+      _hasMore = false;
+      _moreError = '';
+      _pagingEnd = '';
+      _pagesLoaded = 0;
       _result = null;
       _status = '${_isWorks ? '作品' : 'チャプター'}一覧を取得中';
     });
 
     try {
+      final pagination = _pagination;
       final result = await _client.load(
         site: widget.site,
         kind: widget.kind,
@@ -208,19 +385,40 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         renderedFetcher: _fetchRendered,
       );
 
-      if (!mounted || generation != _generation || cancel.isCancelled) return;
+      if (!mounted || generation != _generation || cancel.isCancelled) {
+        return;
+      }
 
-      final warningRows = result.items.where((item) => item.url == null).length;
+      // 最初のページ内の重複URLも除く。
+      // リンク不正の項目は設定確認用として残す。
+      final seen = <String>{};
+      final items = result.items.where((item) {
+        if (!_isWorks || item.url == null) return true;
+        return seen.add(item.url!.removeFragment().toString());
+      }).toList();
 
       setState(() {
-        _result = result;
-        _status = result.total == 0
+        _result = RuleBrowseResult(
+          pageUri: result.pageUri,
+          total: items.length,
+          items: List.unmodifiable(items),
+          workDetails: result.workDetails,
+        );
+        _lastPage = pagination?.start ?? 0;
+        _pagesLoaded = 1;
+        _hasMore =
+            pagination != null &&
+            items.any((item) => item.url != null) &&
+            _lastPage < PageUrlTemplate.maxPage;
+
+        _status = items.isEmpty
             ? '一覧が見つかりませんでした。URLとまとまりの設定を確認してください。'
-            : '${result.total}件を取得しました'
-                  '${warningRows == 0 ? '' : '／要確認：$warningRows件'}';
+            : '${items.length}件を取得しました';
       });
     } catch (error) {
-      if (!mounted || generation != _generation || cancel.isCancelled) return;
+      if (!mounted || generation != _generation || cancel.isCancelled) {
+        return;
+      }
       setState(() => _status = '取得できませんでした：$error');
     } finally {
       if (mounted && generation == _generation) {
@@ -403,6 +601,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   void dispose() {
     _generation++;
     _cancel?.cancel('画面終了');
+    _scrollController.dispose();
     _client.close();
     super.dispose();
   }
@@ -430,6 +629,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     ),
     body: SafeArea(
       child: CustomScrollView(
+        controller: _scrollController,
         key: PageStorageKey<String>(
           '${widget.site.id}:${widget.kind}:'
           '${widget.targetUrl ?? ''}:'
@@ -460,6 +660,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
                 ),
               ),
             ),
+          SliverToBoxAdapter(child: _pagingFooter()),
         ],
       ),
     ),

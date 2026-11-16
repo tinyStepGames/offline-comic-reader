@@ -4,6 +4,7 @@ import 'html_probe.dart';
 import 'list_extraction_rule.dart';
 import 'site_rule_store.dart';
 import 'work_page_details.dart';
+import 'page_url_template.dart';
 
 typedef RulePageFetcher =
     Future<HtmlProbePage> Function(
@@ -71,6 +72,7 @@ class RuleBrowseClient {
     required String kind,
     required CancelToken cancelToken,
     String? targetUrl,
+    int? pageNumber,
     RenderedRulePageFetcher? renderedFetcher,
   }) async {
     _checkCancelled(cancelToken);
@@ -100,7 +102,22 @@ class RuleBrowseClient {
     }
 
     final sample = htmlProbeUri(template.pageUrl);
-    final target = htmlProbeUri(targetUrl ?? template.pageUrl);
+
+    final pagination = template.paginationUrl.isEmpty
+        ? null
+        : PageUrlTemplate(template.paginationUrl);
+
+    if (pageNumber != null &&
+        (kind != 'works' || pagination == null || targetUrl != null)) {
+      throw const FormatException('この取得条件ではページ番号を指定できません');
+    }
+
+    final target = htmlProbeUri(
+      targetUrl ??
+          (kind == 'works' && pagination != null
+              ? pagination.url(pageNumber ?? pagination.start)
+              : template.pageUrl),
+    );
 
     if (target.origin != sample.origin) {
       throw const FormatException(

@@ -8,6 +8,7 @@ import 'package:html/parser.dart' as html;
 import 'html_probe.dart';
 import 'list_text_transform.dart';
 import 'relative_time_text.dart';
+import 'page_url_template.dart';
 
 enum ListValueMode { text, attribute, cssUrl }
 
@@ -140,6 +141,7 @@ class ListExtractionRule {
     this.kind = 'works',
     this.acquisition = 'staticHtml',
     this.details = const <String, ListFieldRule>{},
+    this.paginationUrl = '',
   });
 
   static const qrPrefix = 'ocr-list:3:';
@@ -150,9 +152,17 @@ class ListExtractionRule {
   final String kind;
   final String acquisition;
   final Map<String, ListFieldRule> details;
+  final String paginationUrl;
 
   void validate() {
     htmlProbeUri(pageUrl);
+
+    if (paginationUrl.isNotEmpty) {
+      if (kind != 'works') {
+        throw const FormatException('ページ送りは作品一覧でのみ使用できます');
+      }
+      PageUrlTemplate(paginationUrl).validateOrigin(pageUrl);
+    }
 
     if (pageUrl.length > 4096 ||
         groupSelector.length > 2048 ||
@@ -201,8 +211,9 @@ class ListExtractionRule {
 
   Map<String, dynamic> toJson() => {
     'format': 'offline-comic-reader.list-extraction',
-    'version': details.isEmpty ? 3 : 4,
+    'version': paginationUrl.isNotEmpty ? 5 : (details.isEmpty ? 3 : 4),
     'pageUrl': pageUrl,
+    if (paginationUrl.isNotEmpty) 'paginationUrl': paginationUrl,
     'kind': kind,
     'acquisition': acquisition,
     'groupSelector': groupSelector,
@@ -218,7 +229,9 @@ class ListExtractionRule {
 
   String encodeQr() {
     validate();
-    final exportPrefix = details.isEmpty ? qrPrefix : 'ocr-list:4:';
+    final exportPrefix = paginationUrl.isNotEmpty
+        ? 'ocr-list:5:'
+        : (details.isEmpty ? qrPrefix : 'ocr-list:4:');
     final value =
         '$exportPrefix${base64Url.encode(utf8.encode(jsonEncode(toJson())))}';
 
@@ -235,7 +248,9 @@ class ListExtractionRule {
       throw const FormatException('設定が大きすぎます');
     }
 
-    final prefix = value.startsWith('ocr-list:4:')
+    final prefix = value.startsWith('ocr-list:5:')
+        ? 'ocr-list:5:'
+        : value.startsWith('ocr-list:4:')
         ? 'ocr-list:4:'
         : value.startsWith(qrPrefix)
         ? qrPrefix
@@ -258,7 +273,7 @@ class ListExtractionRule {
     final data = Map<String, dynamic>.from(jsonDecode(value) as Map);
 
     if (data['format'] != 'offline-comic-reader.list-extraction' ||
-        !const [1, 2, 3, 4].contains(data['version']) ||
+        !const [1, 2, 3, 4, 5].contains(data['version']) ||
         data.keys.any(
           (key) => !const {
             'format',
@@ -269,13 +284,19 @@ class ListExtractionRule {
             'groupSelector',
             'fields',
             'details',
+            'paginationUrl',
           }.contains(key),
         )) {
       throw const FormatException('未対応の一覧ルールです');
     }
 
-    if (data.containsKey('details') && data['version'] != 4) {
-      throw const FormatException('作品詳細設定にはバージョン4が必要です');
+    if (data.containsKey('details') &&
+        !const [4, 5].contains(data['version'])) {
+      throw const FormatException('作品詳細設定にはバージョン4以降が必要です');
+    }
+
+    if (data.containsKey('paginationUrl') && data['version'] != 5) {
+      throw const FormatException('ページ送り設定にはバージョン5が必要です');
     }
 
     final rawDetails = Map<String, dynamic>.from(
@@ -292,6 +313,7 @@ class ListExtractionRule {
     }
     final rule = ListExtractionRule(
       pageUrl: data['pageUrl'] as String,
+      paginationUrl: data['paginationUrl'] as String? ?? '',
       groupSelector: data['groupSelector'] as String,
       kind: data['kind'] as String,
       acquisition: data['acquisition'] as String,
