@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'list_rule_lab_page.dart';
+import 'rule_browse_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
 import 'services/site_rule_store.dart';
@@ -115,6 +116,13 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
     );
 
     if (mounted) await _load();
+  }
+
+  Future<void> _browse(SavedSiteRule site) async {
+    if (_busy) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => RuleBrowsePage(site: site)),
+    );
   }
 
   Future<void> _import() async {
@@ -243,13 +251,23 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: FilledButton.icon(
+              onPressed: _busy || !site.rules.containsKey('works')
+                  ? null
+                  : () => _browse(site),
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('作品一覧を開く'),
+            ),
+          ),
           _slot(site, 'works', '作品一覧'),
           _slot(site, 'chapters', 'チャプター一覧'),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
             child: Text(
               '本文画像：未対応\n'
-              '現在は設定の保存・編集用です。読書機能には未接続です。',
+              '通常HTMLの作品・チャプター一覧を取得できます。本文画像・読書機能は未接続です。',
               style: TextStyle(color: Colors.white54),
             ),
           ),

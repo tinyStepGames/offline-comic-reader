@@ -32,7 +32,7 @@ Uri htmlProbeUri(String value) {
     throw const FormatException('認証情報を含まない https:// のURLを入力してください');
   }
 
-  return uri.replace(fragment: '');
+  return uri.removeFragment();
 }
 
 String decodeProbeHtml(List<int> bytes, String contentType) {
@@ -79,11 +79,15 @@ class HtmlProbeClient {
   Future<HtmlProbePage> fetch(
     String input, {
     required CancelToken cancelToken,
+    String? allowedOrigin,
   }) async {
     var uri = htmlProbeUri(input);
 
     // 自動転送を無効にし、転送先もHTTPSかを検証する。
     for (var redirects = 0; redirects <= 5; redirects++) {
+      if (allowedOrigin != null && uri.origin != allowedOrigin) {
+        throw const FormatException('設定した取得元とは異なる転送先です。URLとサイト設定を確認してください');
+      }
       final response = await _dio.get<ResponseBody>(
         uri.toString(),
         cancelToken: cancelToken,

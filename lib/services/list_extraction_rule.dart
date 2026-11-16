@@ -303,11 +303,15 @@ String firstCssUrl(String value) {
 
 ListExtractionReport extractListRows(
   HtmlProbePage page,
-  ListExtractionRule rule,
-) {
+  ListExtractionRule rule, {
+  int maxRows = 100,
+}) {
+  if (maxRows < 1 || maxRows > 5000) {
+    throw const FormatException('抽出件数は1～5000件で指定してください');
+  }
   rule.validate();
 
-  if (htmlProbeUri(rule.pageUrl) != page.uri.replace(fragment: '')) {
+  if (htmlProbeUri(rule.pageUrl) != page.uri.removeFragment()) {
     throw const FormatException('ルールのURLと取得したHTMLのURLが違います');
   }
 
@@ -325,7 +329,7 @@ ListExtractionReport extractListRows(
   final groups = document.querySelectorAll(rule.groupSelector);
   final rows = <ExtractedListRow>[];
 
-  for (final group in groups.take(100)) {
+  for (final group in groups.take(maxRows)) {
     final values = <String, String>{};
     final issues = <String>[];
 
@@ -405,6 +409,7 @@ String encodeListRuleCache(dynamic data) => jsonEncode(data);
 Future<ListExtractionReport> extractListRowsSafely(
   HtmlProbePage page,
   ListExtractionRule rule, {
+  int maxRows = 100,
   Duration timeout = const Duration(seconds: 3),
 }) async {
   final port = ReceivePort();
@@ -431,7 +436,7 @@ Future<ListExtractionReport> extractListRowsSafely(
   try {
     worker = await Isolate.spawn<List<Object?>>(
       _listExtractionWorker,
-      <Object?>[port.sendPort, page, rule],
+      <Object?>[port.sendPort, page, rule, maxRows],
       onError: port.sendPort,
       onExit: port.sendPort,
       errorsAreFatal: true,
@@ -457,6 +462,7 @@ void _listExtractionWorker(List<Object?> input) {
     final report = extractListRows(
       input[1] as HtmlProbePage,
       input[2] as ListExtractionRule,
+      maxRows: input[3] as int,
     );
     port.send(<Object?>['ok', report]);
   } catch (error) {
