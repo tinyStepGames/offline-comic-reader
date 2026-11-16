@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'services/html_probe.dart';
+import 'services/selector_check.dart';
 
 class VisualPick {
   const VisualPick({
@@ -66,53 +67,75 @@ const _pickerScript = r'''
     marked = [];
   };
 
-  const esc = s => CSS.escape(s);
+  const safeName = value => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value);
+
+  const quote = value =>
+    '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+
   const simple = el => {
     const tag = el.tagName.toLowerCase();
     const classes = [...el.classList]
-      .filter(v => v.length < 50 && !/\d{5}/.test(v))
+      .filter(v => v.length < 50 && safeName(v) && !/\d{5}/.test(v))
       .slice(0, 2);
-    return tag + classes.map(v => '.' + esc(v)).join('');
+    return tag + classes.map(v => '.' + v).join('');
   };
 
-  const path = el => {
-    const parts = [];
-    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-      let part = node.tagName.toLowerCase();
-      if (node.id) {
-        part += '#' + esc(node.id);
-        parts.unshift(part);
-        break;
-      }
-      const parent = node.parentElement;
-      if (parent) {
-        const siblings = [...parent.children].filter(
-          n => n.tagName === node.tagName
-        );
-        if (siblings.length > 1) {
-          part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-        }
-      }
-      parts.unshift(part);
+  const strong = el => {
+    const tag = el.tagName.toLowerCase();
+
+    if (el.id && el.id.length < 120 && !/[\r\n\f]/.test(el.id)) {
+      return safeName(el.id)
+        ? '#' + el.id
+        : tag + '[id=' + quote(el.id) + ']';
     }
+
+    for (const key of [
+      'data-testid', 'data-test', 'itemprop', 'name', 'role', 'lang'
+    ]) {
+      const value = el.getAttribute(key);
+      if (value && value.length < 100 && !/[\r\n\f]/.test(value)) {
+        return tag + '[' + key + '=' + quote(value) + ']';
+      }
+    }
+
+    return simple(el);
+  };
+
+  const exactSegment = el => {
+    const base = strong(el);
+    const parent = el.parentElement;
+    if (!parent) return base;
+
+    const siblings = [...parent.children];
+    const matching = siblings.filter(node => node.matches(base));
+
+    if (matching.length <= 1) return base;
+
+    const index = siblings.indexOf(el);
+
+    // 空白テキストノードに左右されない、要素同士の隣接関係を使う。
+    return siblings.slice(0, index + 1)
+      .map((node, i) =>
+        strong(node) + (i === 0 ? ':first-child' : '')
+      )
+      .join(' + ');
+  };
+
+  const path = (el, root = null) => {
+    const parts = [];
+    let depth = 0;
+
+    for (
+      let node = el;
+      node && node !== root && node.nodeType === 1 && depth < 30;
+      node = node.parentElement, depth++
+    ) {
+      parts.unshift(exactSegment(node));
+      if (!root && node.id) break;
+    }
+
     return parts.join(' > ');
   };
-
-  const relativePath = (el, root) => {
-    const parts = [];
-    for (let node = el; node && node !== root; node = node.parentElement) {
-      let part = node.tagName.toLowerCase();
-      const siblings = [...node.parentElement.children].filter(
-        item => item.tagName === node.tagName
-      );
-      if (siblings.length > 1) {
-        part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-      }
-      parts.unshift(part);
-    }
-    return parts.join(' > ');
-  };
-
   const highlight = selector => {
     restore();
     let nodes;
@@ -139,24 +162,33 @@ const _pickerScript = r'''
     const candidates = [];
     let proposals;
 
-    if (scopeSelector) {
-      if (el === root) {
-        proposals = [''];
-      } else {
-        proposals = [simple(el)];
-        if (el.parentElement && el.parentElement !== root) {
-          proposals.push(simple(el.parentElement) + ' > ' + simple(el));
-        }
-        proposals.push(relativePath(el, root));
-      }
+    if (scopeSelector && el === root) {
+      proposals = [''];
     } else {
-      proposals = [simple(el)];
-      if (el.parentElement) {
-        proposals.push(simple(el.parentElement) + ' > ' + simple(el));
+      proposals = [strong(el), simple(el)];
+
+      if (el.parentElement && el.parentElement !== root) {
+        proposals.push(
+          strong(el.parentElement) + ' > ' + strong(el)
+        );
       }
-      proposals.push(path(el));
+
+      let ancestor = el.parentElement;
+      for (let depth = 0;
+           ancestor && ancestor !== root && depth < 5;
+           ancestor = ancestor.parentElement, depth++) {
+        if (ancestor.id) {
+          proposals.push(strong(ancestor) + ' ' + strong(el));
+          break;
+        }
+      }
+
+      proposals.push(path(el, root));
     }
 
+    proposals = proposals
+      .filter(selector => selector.length <= 8192)
+      .slice(0, 10);
     for (const selector of [...new Set(proposals)]) {
       try {
         candidates.push({
@@ -415,10 +447,18 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
   Future<void> _use() async {
     if (!_ready || _capturing || _selected == null) return;
     if (widget.groupSelector.isEmpty && _selector.isEmpty) return;
+
     if (widget.groupSelector.isNotEmpty && _value == 'innerHtml') {
       setState(() => _status = '一覧の項目には文字列または属性を選んでください');
       return;
     }
+
+    final selectedSelector = _selector;
+    final selectedValue = _value;
+    final candidates = (_selected!['candidates'] as List)
+        .map((value) => Map<String, dynamic>.from(value as Map))
+        .toList();
+
     setState(() => _capturing = true);
 
     try {
@@ -442,24 +482,163 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
         throw const FormatException('表示後DOMが上限の2MiBを超えています');
       }
 
-      final mode = _value == 'text'
+      final mode = selectedValue == 'text'
           ? HtmlValueMode.text
-          : _value == 'innerHtml'
+          : selectedValue == 'innerHtml'
           ? HtmlValueMode.innerHtml
           : HtmlValueMode.attribute;
 
+      final selectors = candidates
+          .map((candidate) => candidate['selector'] as String)
+          .toSet()
+          .toList();
+
+      if (!selectors.contains(selectedSelector)) {
+        throw const FormatException('選択中のセレクターが候補にありません');
+      }
+
+      final results = await checkSelectorCandidates(
+        source: source,
+        selectors: selectors,
+        scope: widget.groupSelector,
+        valueMode: mode.name,
+        attribute: mode == HtmlValueMode.attribute ? selectedValue : '',
+      );
+
+      final chosen = results.firstWhere(
+        (result) => result['selector'] == selectedSelector,
+      );
+
+      final chosenError = chosen['error'] as String;
+      final chosenCount = chosen['count'] as int;
+      final canUse = chosenError.isEmpty && chosenCount > 0;
+
       if (!mounted) return;
+
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('セレクターの抽出確認'),
+          content: SizedBox(
+            width: 600,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('現在の表示後HTMLを、実際のHTML抽出用パーサーで確認しました。'),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '選択中の候補',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  SelectableText(
+                    selectedSelector.isEmpty
+                        ? '要素自身（まとまりそのもの）'
+                        : selectedSelector,
+                  ),
+                  const SizedBox(height: 8),
+                  if (chosenError.isNotEmpty)
+                    Text(
+                      '使用できません：$chosenError',
+                      style: const TextStyle(color: Colors.orangeAccent),
+                    )
+                  else if (chosenCount == 0)
+                    const Text(
+                      'HTML抽出側で一致0件のため使用できません。',
+                      style: TextStyle(color: Colors.orangeAccent),
+                    )
+                  else ...[
+                    Text('HTML抽出側：$chosenCount件に一致'),
+                    if (chosenCount > 1)
+                      const Text(
+                        '複数一致しています。一覧用には必要な場合がありますが、'
+                        '作品詳細では意図しない先頭要素を取得しないか確認してください。',
+                        style: TextStyle(color: Colors.orangeAccent),
+                      ),
+                    const SizedBox(height: 8),
+                    const Text('取得内容の例（先頭3件・各240文字まで）'),
+                    for (final preview in chosen['previews'] as List) ...[
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        (preview as String).isEmpty
+                            ? '（取得する値が空です。取得方法や属性を確認してください）'
+                            : preview,
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const Text(
+                    'ほかの候補の確認結果',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  for (final result in results) ...[
+                    const SizedBox(height: 10),
+                    SelectableText(
+                      (result['selector'] as String).isEmpty
+                          ? '要素自身'
+                          : result['selector'] as String,
+                    ),
+                    Text(
+                      (result['error'] as String).isNotEmpty
+                          ? '使用不可：${result['error']}'
+                          : 'HTML抽出側：${result['count']}件に一致',
+                      style: TextStyle(
+                        color:
+                            (result['error'] as String).isNotEmpty ||
+                                result['count'] == 0
+                            ? Colors.orangeAccent
+                            : Colors.white70,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  const Text(
+                    '候補を変える場合は「戻って選び直す」を押してください。\n'
+                    'これは現在の表示後HTMLでの確認です。通常HTMLや別作品でも'
+                    '使えるかは、設定画面のテストで確認してください。\n'
+                    'プレビューは正規表現・整形・相対URL解決などを適用する前の値です。',
+                    style: TextStyle(fontSize: 12, color: Colors.white60),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('戻って選び直す'),
+            ),
+            FilledButton(
+              onPressed: canUse
+                  ? () => Navigator.pop(dialogContext, true)
+                  : null,
+              child: const Text('この設定を使う'),
+            ),
+          ],
+        ),
+      );
+
+      if (approved != true || !mounted) return;
+
+      // 確認ダイアログを閉じるフレームと画面を閉じる処理を分ける。
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+
       Navigator.pop(
         context,
         VisualPick(
           page: HtmlProbePage(uri: uri, source: source, bytes: bytes),
-          selector: _selector,
+          selector: selectedSelector,
           mode: mode,
-          attribute: mode == HtmlValueMode.attribute ? _value : 'href',
+          attribute: mode == HtmlValueMode.attribute ? selectedValue : 'href',
         ),
       );
     } catch (error) {
-      if (mounted) setState(() => _status = '反映できませんでした：$error');
+      if (mounted) {
+        setState(() => _status = '確認・反映できませんでした：$error');
+      }
     } finally {
       if (mounted) setState(() => _capturing = false);
     }
@@ -519,7 +698,7 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
               ),
               subtitle: Text(
                 '${candidate['count']}件に一致'
-                '${(candidate['selector'] as String).contains('nth-of-type') ? '／位置依存のため変更に弱い候補' : ''}',
+                '${(candidate['selector'] as String).contains(':first-child') ? '／位置依存のため変更に弱い候補' : ''}',
               ),
               value: candidate['selector'] as String,
               groupValue: _selector,
@@ -564,7 +743,7 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
           const SizedBox(height: 8),
           FilledButton(
             onPressed: _ready && !_capturing ? _use : null,
-            child: Text(_capturing ? '反映中…' : 'この設定を使う'),
+            child: Text(_capturing ? '確認中…' : '確認してこの設定を使う'),
           ),
           const SizedBox(height: 12),
           const Text('文字列プレビュー'),
