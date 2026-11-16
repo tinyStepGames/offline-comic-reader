@@ -40,6 +40,7 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
   List<Uri> _images = [];
   bool _loading = false;
   bool _opened = false;
+  bool _waitingControls = false;
   String? _error;
 
   @override
@@ -76,8 +77,7 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
           groupSelector: groupSelector,
           cancelToken: cancelToken,
           backgroundMode: true,
-          previewTitle: '本文画像を取得中',
-          previewThumbnail: widget.workThumbnail,
+          silentMode: true,
         ),
       ),
     );
@@ -163,6 +163,31 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
   Widget build(BuildContext context) {
     final chapter = widget.chapters[_index];
 
+    if (!_opened && (_loading || _error == null)) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            setState(() => _waitingControls = !_waitingControls);
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              const ColoredBox(color: Colors.black),
+              if (_waitingControls)
+                const SafeArea(
+                  child: Align(
+                    alignment: Alignment.topLeft,
+                    child: BackButton(color: Colors.white),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (!_opened) {
       return Scaffold(
         backgroundColor: Colors.black,
@@ -216,10 +241,23 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
           ),
         ),
         if (_loading)
-          const Positioned.fill(
-            child: ColoredBox(
-              color: Color(0x99000000),
-              child: Center(child: CircularProgressIndicator()),
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => _waitingControls = !_waitingControls);
+              },
+              child: ColoredBox(
+                color: Colors.black,
+                child: _waitingControls
+                    ? const SafeArea(
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: BackButton(color: Colors.white),
+                        ),
+                      )
+                    : const SizedBox.expand(),
+              ),
             ),
           ),
       ],

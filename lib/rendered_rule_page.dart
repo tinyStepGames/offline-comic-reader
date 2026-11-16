@@ -19,6 +19,7 @@ class RenderedRulePage extends StatefulWidget {
     required this.groupSelector,
     required this.cancelToken,
     this.backgroundMode = false,
+    this.silentMode = false,
     this.previewTitle = '',
     this.previewThumbnail,
   });
@@ -28,6 +29,7 @@ class RenderedRulePage extends StatefulWidget {
   final String groupSelector;
   final CancelToken cancelToken;
   final bool backgroundMode;
+  final bool silentMode;
   final String previewTitle;
   final Uri? previewThumbnail;
 
@@ -42,6 +44,7 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
   Uri? _initial;
   bool _prepared = false;
   bool _showBrowser = false;
+  bool _silentControls = false;
   bool _polling = false;
   bool _capturing = false;
   bool _finished = false;
@@ -288,6 +291,76 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.silentMode && !_showBrowser) {
+      final failedPreparation = _status.startsWith('準備できませんでした');
+      final waiting = (_auto || _capturing) && !failedPreparation;
+
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          // 隠している間もWebViewを動かしてHTMLを取得する。
+          _buildBrowser(context),
+          Positioned.fill(
+            child: Scaffold(
+              backgroundColor: Colors.black,
+              body: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  setState(() => _silentControls = !_silentControls);
+                },
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const ColoredBox(color: Colors.black),
+                    if (_silentControls || !waiting)
+                      const SafeArea(
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: BackButton(color: Colors.white),
+                        ),
+                      ),
+                    if (!waiting)
+                      Center(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _status,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              const SizedBox(height: 16),
+                              FilledButton.icon(
+                                onPressed: () {
+                                  setState(() => _showBrowser = true);
+                                },
+                                icon: const Icon(Icons.open_in_browser),
+                                label: const Text('ページを表示して操作'),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _auto = true;
+                                    _resetWaiting();
+                                  });
+                                },
+                                child: const Text('自動取得を再試行'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Stack(
       fit: StackFit.expand,
       children: [

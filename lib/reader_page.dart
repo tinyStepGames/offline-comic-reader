@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'reading_progress.dart';
+import 'reader_horizontal_pager.dart';
+import 'reader_network_image.dart';
+import 'services/reader_look_ahead.dart';
 
 enum ReadingMode { vertical, horizontal }
 
@@ -34,12 +37,62 @@ class ReaderPage extends StatefulWidget {
 }
 
 class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
+  // 起動中は、話ごとの古い設定より直近の読み方を優先する。
+  static ReadingMode? _sessionReadingMode;
   final ItemScrollController _verticalController = ItemScrollController();
 
   final ItemPositionsListener _positions = ItemPositionsListener.create();
 
   PageController? _horizontalController;
   Timer? _saveTimer;
+
+  late final ReaderLookAhead _lookAhead;
+  final Set<int> _networkReady = <int>{};
+
+  int get _readerDecodeWidth {
+    final media = MediaQuery.maybeOf(context);
+    final pixels = media == null
+        ? 1080.0
+        : media.size.width * media.devicePixelRatio;
+    return pixels.round().clamp(1, 1800).toInt();
+  }
+
+  ImageProvider<Object> _networkProvider(
+    int index, {
+    bool fullResolution = false,
+  }) {
+    final original = NetworkImage(widget.imageUrls[index].toString());
+    if (fullResolution) return original;
+
+    return ResizeImage.resizeIfNeeded(_readerDecodeWidth, null, original);
+  }
+
+  void _updateLookAhead() {
+    if (!mounted ||
+        !_ready ||
+        widget.imageUrls.isEmpty ||
+        !_networkReady.contains(_index)) {
+      _lookAhead.update(const <int>[]);
+      return;
+    }
+
+    final targets = <int>[];
+    for (var offset = 1; offset <= 2; offset++) {
+      final target = _index + offset;
+      if (target < widget.imageUrls.length) {
+        targets.add(target);
+      }
+    }
+    _lookAhead.update(targets);
+  }
+
+  void _onNetworkReady(int index) {
+    if (!mounted) return;
+    _networkReady.add(index);
+    if (index == _index) {
+      _updateLookAhead();
+    }
+  }
 
   ReadingMode _mode = ReadingMode.vertical;
   bool _controlsVisible = false;
@@ -56,6 +109,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+
+    _lookAhead = ReaderLookAhead(
+      load: (index) async {
+        if (!mounted || index >= widget.imageUrls.length) return;
+
+        // 画面表示と同じ画像キーでキャッシュする。
+        // エラーは先読みだけで処理し、読書画面全体を失敗にしない。
+        var failed = false;
+        await precacheImage(
+          _networkProvider(index),
+          context,
+          onError: (Object error, StackTrace? stack) {
+            failed = true;
+          },
+        );
+
+        if (mounted && !failed) {
+          _networkReady.add(index);
+        }
+      },
+    );
     WidgetsBinding.instance.addObserver(this);
     _positions.itemPositions.addListener(_onVisibleItemsChanged);
     _restore();
@@ -74,10 +148,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (saved != null && _count > 0) {
       // 画像数が変わっていても、存在する範囲に収める。
       _index = saved.pageIndex.clamp(0, _count - 1).toInt();
-      _mode = saved.mode == 'horizontal'
-          ? ReadingMode.horizontal
-          : ReadingMode.vertical;
     }
+
+    _mode =
+        _sessionReadingMode ??
+        (saved?.mode == 'horizontal'
+            ? ReadingMode.horizontal
+            : ReadingMode.vertical);
+
+    _sessionReadingMode ??= _mode;
 
     _verticalStart = _index;
     _horizontalController = PageController(
@@ -115,6 +194,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (index == _index || index < 0 || index >= _count) return;
 
     setState(() => _index = index);
+    _updateLookAhead();
     _scheduleSave();
   }
 
@@ -163,6 +243,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _lookAhead.dispose();
     _saveNow();
     _saveTimer?.cancel();
     _positions.itemPositions.removeListener(_onVisibleItemsChanged);
@@ -172,6 +253,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   void _changeMode(ReadingMode next) {
+    _sessionReadingMode = next;
     if (_mode == next) return;
 
     if (next == ReadingMode.horizontal) {
@@ -224,7 +306,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _image(int index, {double? width, BoxFit fit = BoxFit.contain}) {
+  Widget _image(
+    int index, {
+    double? width,
+    BoxFit fit = BoxFit.contain,
+    bool fullResolution = false,
+  }) {
     if (widget.imageUrls.isEmpty) {
       return Image.file(
         widget.files[index],
@@ -234,20 +321,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       );
     }
 
-    return Image.network(
-      widget.imageUrls[index].toString(),
+    return ReaderNetworkImage(
+      provider: _networkProvider(index, fullResolution: fullResolution),
       width: width,
       fit: fit,
-      errorBuilder: _imageError,
-      loadingBuilder: (context, child, progress) {
-        if (progress == null) return child;
-
-        return SizedBox(
-          width: width,
-          height: 240,
-          child: const Center(child: CircularProgressIndicator()),
-        );
-      },
+      onReady: fullResolution ? null : () => _onNetworkReady(index),
     );
   }
 
@@ -262,7 +340,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               child: InteractiveViewer(
                 minScale: 1,
                 maxScale: 5,
-                child: Center(child: _image(index)),
+                child: Center(child: _image(index, fullResolution: true)),
               ),
             ),
           ),
@@ -274,15 +352,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   bool get _hasChapterNavigation =>
       widget.onPreviousChapter != null || widget.onNextChapter != null;
 
-  Widget _chapterNavigation() {
+  Widget _chapterNavigation({bool overlay = false}) {
     if (!_hasChapterNavigation) {
       return const SizedBox.shrink();
     }
 
     return SizedBox(
       height: 64,
-      child: ColoredBox(
-        color: Colors.black,
+      child: Material(
+        color: overlay ? Colors.black54 : Colors.black,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
@@ -322,46 +400,80 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   Widget _verticalReader() {
     final offset = _hasChapterNavigation ? 1 : 0;
 
-    return ScrollablePositionedList.builder(
-      initialScrollIndex: _verticalStart + offset,
-      itemScrollController: _verticalController,
-      itemPositionsListener: _positions,
-      padding: EdgeInsets.zero,
-      itemCount: _count + offset * 2,
-      itemBuilder: (context, itemIndex) {
-        if (_hasChapterNavigation &&
-            (itemIndex == 0 || itemIndex == _count + 1)) {
-          return _chapterNavigation();
-        }
-
-        final index = itemIndex - offset;
-
-        return GestureDetector(
-          onDoubleTap: () => _zoom(index),
-          child: _image(index, width: double.infinity, fit: BoxFit.fitWidth),
-        );
-      },
-    );
-  }
-
-  Widget _horizontalReader() {
-    return Column(
+    return Stack(
+      fit: StackFit.expand,
       children: [
-        _chapterNavigation(),
-        Expanded(
-          child: PageView.builder(
-            controller: _horizontalController,
-            itemCount: _count,
-            onPageChanged: _setIndex,
-            itemBuilder: (context, index) {
+        Positioned.fill(
+          child: ScrollablePositionedList.builder(
+            initialScrollIndex: _verticalStart + offset,
+            itemScrollController: _verticalController,
+            itemPositionsListener: _positions,
+            padding: EdgeInsets.zero,
+            itemCount: _count + offset * 2,
+            itemBuilder: (context, itemIndex) {
+              if (_hasChapterNavigation &&
+                  (itemIndex == 0 || itemIndex == _count + 1)) {
+                return _chapterNavigation();
+              }
+
+              final index = itemIndex - offset;
+
               return GestureDetector(
                 onDoubleTap: () => _zoom(index),
-                child: SizedBox.expand(child: Center(child: _image(index))),
+                child: _image(
+                  index,
+                  width: double.infinity,
+                  fit: BoxFit.fitWidth,
+                ),
               );
             },
           ),
         ),
-        _chapterNavigation(),
+
+        // Vertical chapter navigation overlay
+        // 途中のページでも、操作表示中は話移動ボタンを重ねる。
+        // スクロール領域のサイズや余白は変更しない。
+        if (_controlsVisible && _hasChapterNavigation)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _chapterNavigation(overlay: true),
+          ),
+      ],
+    );
+  }
+
+  Widget _horizontalReader() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: ReaderHorizontalPager(
+            controller: _horizontalController!,
+            itemCount: _count,
+            onPageChanged: _setIndex,
+            onPrevious: _index > 0 ? () => _move(-1) : null,
+            onNext: _index < _count - 1 ? () => _move(1) : null,
+            onToggleControls: () {
+              setState(() {
+                _controlsVisible = !_controlsVisible;
+              });
+            },
+            onZoom: _zoom,
+            imageBuilder: (context, index) => _image(index),
+          ),
+        ),
+
+        // 下端のページ送り操作と重ならない位置に表示する。
+        // Positionedなので画像の表示領域は変化しない。
+        if (_controlsVisible && _hasChapterNavigation)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 64,
+            child: _chapterNavigation(overlay: true),
+          ),
       ],
     );
   }
@@ -369,10 +481,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     if (!_ready) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(backgroundColor: Colors.black);
     }
 
     final showControls = _controlsVisible || _count == 0;
