@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'services/download_store.dart';
 import 'services/html_probe.dart';
+import 'chapter_image_lab_page.dart';
 
 class HtmlRuleLabPage extends StatefulWidget {
   const HtmlRuleLabPage({super.key, required this.store});
@@ -100,6 +101,21 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
           '表示後DOMと選択設定を反映しました。\n'
           '「抽出テスト」で確認してください';
     });
+  }
+
+  Future<void> _openChapterImageLab() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterImageLabPage(
+          initialUrl: _page?.uri.toString() ?? _url.text,
+          initialPage: _page,
+          initialAcquisition: _acquisition,
+        ),
+      ),
+    );
   }
 
   Future<void> _openSiteRules() async {
@@ -310,6 +326,11 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
         appBar: AppBar(
           title: const Text('HTMLルール作成室'),
           actions: [
+            IconButton(
+              tooltip: '本文画像テスト',
+              onPressed: _busy ? null : _openChapterImageLab,
+              icon: const Icon(Icons.collections_outlined),
+            ),
             IconButton(
               tooltip: '下書きを保存',
               onPressed: _busy ? null : _saveDraft,
