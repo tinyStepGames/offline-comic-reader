@@ -1,0 +1,383 @@
+import 'package:flutter/material.dart';
+
+import 'list_rule_lab_page.dart';
+import 'services/download_store.dart';
+import 'services/list_extraction_rule.dart';
+import 'services/site_rule_store.dart';
+
+class SiteRulesPage extends StatefulWidget {
+  const SiteRulesPage({super.key, required this.store});
+  final DownloadStore store;
+
+  @override
+  State<SiteRulesPage> createState() => _SiteRulesPageState();
+}
+
+class _SiteRulesPageState extends State<SiteRulesPage> {
+  late final SiteRuleStore _repository;
+  List<SavedSiteRule> _sites = [];
+  bool _busy = true;
+  String _status = '保存設定を確認中';
+
+  @override
+  void initState() {
+    super.initState();
+    _repository = SiteRuleStore(widget.store.root);
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) setState(() => _busy = true);
+    try {
+      final sites = await _repository.load();
+      if (!mounted) return;
+      setState(() {
+        _sites = sites;
+        _status = '${sites.length}サイトを保存しています';
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '読み込めませんでした。保存データは変更していません：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _change(Future<void> Function() action, String success) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+      final sites = await _repository.load();
+      if (!mounted) return;
+      setState(() {
+        _sites = sites;
+        _status = success;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '操作できませんでした：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _askText({
+    required String title,
+    required String label,
+    String initial = '',
+    bool multiline = false,
+  }) => showDialog<String>(
+    context: context,
+    builder: (_) => _RuleTextDialog(
+      title: title,
+      label: label,
+      initial: initial,
+      multiline: multiline,
+    ),
+  );
+
+  Future<void> _edit(
+    SavedSiteRule? site,
+    String kind, {
+    ListExtractionRule? imported,
+  }) async {
+    if (_busy) return;
+
+    final existing = site?.rules[kind];
+    final fallback = site == null
+        ? 'https://'
+        : site.rules.values.first.pageUrl;
+    final rule =
+        imported ??
+        existing ??
+        ListExtractionRule(
+          pageUrl: fallback,
+          groupSelector: '',
+          fields: defaultListFields(),
+          kind: kind,
+        );
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ListRuleLabPage(
+          store: widget.store,
+          initialPage: null,
+          initialUrl: rule.pageUrl,
+          initialSelector: rule.groupSelector,
+          initialAcquisition: rule.acquisition,
+          initialRule: rule,
+          savedSite: site,
+        ),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _import() async {
+    if (_busy) return;
+    final text = await _askText(
+      title: '一覧ルールを取り込む',
+      label: '一覧JSONまたはQRの内容文字列',
+      multiline: true,
+    );
+    if (!mounted || text == null) return;
+
+    try {
+      final rule = ListExtractionRule.parse(text);
+      // この時点では保存も通信もしない。
+      await _edit(null, rule.kind, imported: rule);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '取り込めませんでした：$error');
+      }
+    }
+  }
+
+  Future<void> _share(SavedSiteRule site, String kind) async {
+    if (_busy) return;
+    final rule = site.rules[kind];
+    if (rule == null) return;
+
+    final imported = await Navigator.of(context).push<ListExtractionRule>(
+      MaterialPageRoute<ListExtractionRule>(
+        builder: (_) => ListRuleTransferPage(rule: rule),
+      ),
+    );
+
+    if (!mounted || imported == null) return;
+    // 共有画面で取り込んだ設定も、編集画面で保存するまでは反映しない。
+    await _edit(site, imported.kind, imported: imported);
+  }
+
+  Future<void> _menu(SavedSiteRule site, String action) async {
+    if (_busy) return;
+
+    if (action == 'rename') {
+      final name = await _askText(
+        title: 'サイト名を変更',
+        label: 'サイト保存名',
+        initial: site.name,
+      );
+      if (!mounted || name == null) return;
+      await _change(() => _repository.rename(site.id, name), 'サイト名を変更しました');
+    } else if (action == 'duplicate') {
+      await _change(() async {
+        await _repository.duplicate(site.id);
+      }, 'サイト設定を複製しました');
+    } else if (action == 'delete') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('サイト設定を削除'),
+          content: Text(
+            '「${site.name}」の保存設定を削除しますか？\n\n'
+            '作品一覧・チャプター一覧の設定が対象です。'
+            '保存画像・お気に入り・閲覧履歴は削除しません。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('削除する'),
+            ),
+          ],
+        ),
+      );
+
+      if (!mounted || confirmed != true) return;
+      await _change(() => _repository.delete(site.id), 'サイト設定を削除しました');
+    }
+  }
+
+  Widget _slot(SavedSiteRule site, String kind, String label) {
+    final rule = site.rules[kind];
+    return ListTile(
+      title: Text(label),
+      subtitle: Text(
+        rule == null ? '未設定・タップして設定' : '設定済み・タップして編集\n${rule.pageUrl}',
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      ),
+      leading: Icon(
+        rule == null ? Icons.add_circle_outline : Icons.check_circle_outline,
+      ),
+      onTap: _busy ? null : () => _edit(site, kind),
+      trailing: rule == null
+          ? null
+          : IconButton(
+              tooltip: '$labelのJSON・QR',
+              onPressed: _busy ? null : () => _share(site, kind),
+              icon: const Icon(Icons.qr_code),
+            ),
+    );
+  }
+
+  Widget _card(SavedSiteRule site) => Card(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            title: Text(
+              site.name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              '設定保存：${site.updatedAt.toLocal().toString().split('.').first}',
+            ),
+            trailing: PopupMenuButton<String>(
+              enabled: !_busy,
+              onSelected: (value) => _menu(site, value),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'rename', child: Text('名前変更')),
+                PopupMenuItem(value: 'duplicate', child: Text('複製')),
+                PopupMenuItem(value: 'delete', child: Text('削除')),
+              ],
+            ),
+          ),
+          _slot(site, 'works', '作品一覧'),
+          _slot(site, 'chapters', 'チャプター一覧'),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Text(
+              '本文画像：未対応\n'
+              '現在は設定の保存・編集用です。読書機能には未接続です。',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      title: const Text('サイトルール管理'),
+      actions: [
+        IconButton(
+          tooltip: '再読み込み',
+          onPressed: _busy ? null : _load,
+          icon: const Icon(Icons.refresh),
+        ),
+      ],
+    ),
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _busy ? null : () => _edit(null, 'works'),
+                icon: const Icon(Icons.add),
+                label: const Text('新しいサイト'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _import,
+                icon: const Icon(Icons.input),
+                label: const Text('一覧JSONを取り込む'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 3,
+            child: _busy ? const LinearProgressIndicator() : null,
+          ),
+          const SizedBox(height: 12),
+          SelectableText(
+            _status,
+            style: const TextStyle(color: Colors.tealAccent),
+          ),
+          const SizedBox(height: 12),
+          if (!_busy && _sites.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                '保存されたサイトはありません。\n'
+                '既存の一覧編集画面から「サイトに保存」することもできます。',
+              ),
+            ),
+          for (final site in _sites)
+            KeyedSubtree(key: ValueKey(site.id), child: _card(site)),
+        ],
+      ),
+    ),
+  );
+}
+
+class _RuleTextDialog extends StatefulWidget {
+  const _RuleTextDialog({
+    required this.title,
+    required this.label,
+    required this.initial,
+    required this.multiline,
+  });
+
+  final String title;
+  final String label;
+  final String initial;
+  final bool multiline;
+
+  @override
+  State<_RuleTextDialog> createState() => _RuleTextDialogState();
+}
+
+class _RuleTextDialogState extends State<_RuleTextDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.title),
+    content: SizedBox(
+      width: 500,
+      child: SingleChildScrollView(
+        child: TextField(
+          controller: _controller,
+          autofocus: true,
+          autocorrect: false,
+          minLines: widget.multiline ? 5 : 1,
+          maxLines: widget.multiline ? 10 : 1,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('キャンセル'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _controller.text),
+        child: const Text('次へ'),
+      ),
+    ],
+  );
+}

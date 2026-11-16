@@ -8,6 +8,7 @@ import 'services/download_store.dart';
 import 'services/html_probe.dart';
 import 'services/list_extraction_rule.dart';
 import 'services/list_field_pick.dart';
+import 'services/site_rule_store.dart';
 
 class ListRuleLabPage extends StatefulWidget {
   const ListRuleLabPage({
@@ -17,6 +18,8 @@ class ListRuleLabPage extends StatefulWidget {
     required this.initialUrl,
     required this.initialSelector,
     required this.initialAcquisition,
+    this.initialRule,
+    this.savedSite,
   });
 
   final DownloadStore store;
@@ -24,6 +27,8 @@ class ListRuleLabPage extends StatefulWidget {
   final String initialUrl;
   final String initialSelector;
   final String initialAcquisition;
+  final ListExtractionRule? initialRule;
+  final SavedSiteRule? savedSite;
 
   @override
   State<ListRuleLabPage> createState() => _ListRuleLabPageState();
@@ -34,6 +39,8 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
   late final TextEditingController _url;
   late final TextEditingController _group;
+  late final TextEditingController _siteName;
+  String? _savedSiteId;
   final _client = HtmlProbeClient();
   CancelToken? _cancel;
   HtmlProbePage? _page;
@@ -53,6 +60,23 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     _group = TextEditingController(text: widget.initialSelector);
     _page = widget.initialPage;
     _acquisition = widget.initialAcquisition;
+    _savedSiteId = widget.savedSite?.id;
+
+    final host = Uri.tryParse(widget.initialUrl)?.host ?? '';
+    _siteName = TextEditingController(
+      text: widget.savedSite?.name ?? (host.isEmpty ? '新しいサイト' : host),
+    );
+
+    final initial = widget.initialRule;
+    if (initial != null) {
+      _url.text = initial.pageUrl;
+      _group.text = initial.groupSelector;
+      _kind = initial.kind;
+      _acquisition = initial.acquisition;
+      _fields = Map.of(initial.fields);
+      _page = null;
+      _status = '保存設定を開きました。HTML取得またはページから選択してください';
+    }
   }
 
   ListExtractionRule _rule() => ListExtractionRule(
@@ -203,6 +227,34 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
           _report = null;
           _status = 'テストできませんでした：$error';
         });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveSite() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _busy = true);
+
+    try {
+      final saved = await SiteRuleStore(
+        widget.store.root,
+      ).save(id: _savedSiteId, name: _siteName.text, rule: _rule());
+
+      if (!mounted) return;
+      setState(() {
+        _savedSiteId = saved.id;
+        _siteName.text = saved.name;
+        _status =
+            '「${saved.name}」の'
+            '${_kind == 'works' ? '作品一覧' : 'チャプター一覧'}を保存しました。'
+            '読書機能への接続はまだ行っていません。';
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = 'サイトへ保存できませんでした：$error');
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -521,6 +573,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     _client.close();
     _url.dispose();
     _group.dispose();
+    _siteName.dispose();
     super.dispose();
   }
 
@@ -552,6 +605,27 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
               '① 1作品／1話のまとまりを指定\n'
               '② 各項目を「要素自身」または「内側」から取得\n'
               '③ カードで組み合わせを確認',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _siteName,
+              enabled: !_busy,
+              maxLength: 100,
+              decoration: const InputDecoration(
+                labelText: 'サイト保存名',
+                helperText: '保存ボタンで、現在選んでいる種類の一覧設定を保存します。',
+                helperMaxLines: 2,
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                onPressed: _busy ? null : _saveSite,
+                icon: const Icon(Icons.bookmark_add_outlined),
+                label: const Text('サイトに保存'),
+              ),
             ),
             const SizedBox(height: 16),
             TextField(
@@ -656,7 +730,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             const SizedBox(height: 16),
             const Text(
               '下書きは端末内に1件保存します。復元は明示操作です。\n'
-              '現段階は編集・検証用です。サイト登録や読書機能にはまだ接続しません。\n'
+              '「サイトに保存」で複数管理できます。読書機能への接続はまだ行いません。\n'
               '各項目の「まとまりから選ぶ」で内側を選択できます。セレクターの手入力も可能です。',
               style: TextStyle(color: Colors.white54, fontSize: 12),
             ),

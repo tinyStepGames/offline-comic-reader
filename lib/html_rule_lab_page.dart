@@ -1,4 +1,5 @@
 import 'list_rule_lab_page.dart';
+import 'site_rules_page.dart';
 import 'element_inspector_page.dart';
 import 'extraction_rule_transfer.dart';
 import 'package:dio/dio.dart';
@@ -99,6 +100,16 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
           '表示後DOMと選択設定を反映しました。\n'
           '「抽出テスト」で確認してください';
     });
+  }
+
+  Future<void> _openSiteRules() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => SiteRulesPage(store: widget.store),
+      ),
+    );
   }
 
   Future<void> _openListRule() async {
@@ -331,6 +342,11 @@ class _HtmlRuleLabPageState extends State<HtmlRuleLabPage> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _openSiteRules,
+                    icon: const Icon(Icons.folder_outlined),
+                    label: const Text('サイトルール管理'),
+                  ),
                   OutlinedButton.icon(
                     onPressed: _busy ? null : _openListRule,
                     icon: const Icon(Icons.view_list_outlined),
