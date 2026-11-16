@@ -7,6 +7,7 @@ import 'package:html/parser.dart' as html;
 
 import 'html_probe.dart';
 import 'list_text_transform.dart';
+import 'relative_time_text.dart';
 
 enum ListValueMode { text, attribute, cssUrl }
 
@@ -27,6 +28,7 @@ class ListFieldRule {
     this.enabled = true,
     this.pattern = '',
     this.replacement = '',
+    this.localizeRelativeTime = false,
   });
 
   final String selector;
@@ -35,6 +37,7 @@ class ListFieldRule {
   final bool enabled;
   final String pattern;
   final String replacement;
+  final bool localizeRelativeTime;
 
   ListFieldRule copyWith({
     String? selector,
@@ -43,6 +46,7 @@ class ListFieldRule {
     bool? enabled,
     String? pattern,
     String? replacement,
+    bool? localizeRelativeTime,
   }) => ListFieldRule(
     selector: selector ?? this.selector,
     mode: mode ?? this.mode,
@@ -50,6 +54,7 @@ class ListFieldRule {
     enabled: enabled ?? this.enabled,
     pattern: pattern ?? this.pattern,
     replacement: replacement ?? this.replacement,
+    localizeRelativeTime: localizeRelativeTime ?? this.localizeRelativeTime,
   );
 
   Map<String, dynamic> toJson() => {
@@ -59,6 +64,7 @@ class ListFieldRule {
     'enabled': enabled,
     if (pattern.isNotEmpty) 'pattern': pattern,
     if (replacement.isNotEmpty) 'replacement': replacement,
+    if (localizeRelativeTime) 'localizeRelativeTime': true,
   };
 
   factory ListFieldRule.fromJson(Map<String, dynamic> data) {
@@ -70,9 +76,15 @@ class ListFieldRule {
         'enabled',
         'pattern',
         'replacement',
+        'localizeRelativeTime',
       }.contains(key),
     )) {
       throw const FormatException('未対応の項目設定です');
+    }
+
+    if (data.containsKey('localizeRelativeTime') &&
+        data['localizeRelativeTime'] is! bool) {
+      throw const FormatException('相対時間の日本語化設定が不正です');
     }
 
     final mode = ListValueMode.values.where(
@@ -90,6 +102,7 @@ class ListFieldRule {
       enabled: data['enabled'] as bool,
       pattern: data['pattern'] as String? ?? '',
       replacement: data['replacement'] as String? ?? '',
+      localizeRelativeTime: data['localizeRelativeTime'] as bool? ?? false,
     );
   }
 }
@@ -120,7 +133,7 @@ class ListExtractionRule {
     this.acquisition = 'staticHtml',
   });
 
-  static const qrPrefix = 'ocr-list:2:';
+  static const qrPrefix = 'ocr-list:3:';
 
   final String pageUrl;
   final String groupSelector;
@@ -169,7 +182,7 @@ class ListExtractionRule {
 
   Map<String, dynamic> toJson() => {
     'format': 'offline-comic-reader.list-extraction',
-    'version': 2,
+    'version': 3,
     'pageUrl': pageUrl,
     'kind': kind,
     'acquisition': acquisition,
@@ -202,6 +215,8 @@ class ListExtractionRule {
 
     final prefix = value.startsWith(qrPrefix)
         ? qrPrefix
+        : value.startsWith('ocr-list:2:')
+        ? 'ocr-list:2:'
         : value.startsWith('ocr-list:1:')
         ? 'ocr-list:1:'
         : null;
@@ -219,7 +234,7 @@ class ListExtractionRule {
     final data = Map<String, dynamic>.from(jsonDecode(value) as Map);
 
     if (data['format'] != 'offline-comic-reader.list-extraction' ||
-        !const [1, 2].contains(data['version']) ||
+        !const [1, 2, 3].contains(data['version']) ||
         data.keys.any(
           (key) => !const {
             'format',
@@ -345,6 +360,9 @@ ListExtractionReport extractListRows(
         }
 
         value = value.trim();
+        if (key == 'date' && field.localizeRelativeTime) {
+          value = localizeEnglishRelativeTime(value);
+        }
         value = transformListText(
           value,
           pattern: field.pattern,

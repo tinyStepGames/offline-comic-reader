@@ -155,6 +155,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
         _fields[key] = next.copyWith(
           pattern: _fields[key]!.pattern,
           replacement: _fields[key]!.replacement,
+          localizeRelativeTime: _fields[key]!.localizeRelativeTime,
         );
         _revision++;
         _report = null;
@@ -364,6 +365,23 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
                 update(_fields[key]!.copyWith(selector: value)),
           ),
           const SizedBox(height: 12),
+          if (key == 'date')
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('相対時間（英語）を日本語にする'),
+              subtitle: const Text(
+                '例：2 hours ago → 2時間前\n'
+                '未対応の表示は変更しません。日時の計算や自動更新は行いません。',
+              ),
+              isThreeLine: true,
+              value: rule.localizeRelativeTime,
+              onChanged: _busy
+                  ? null
+                  : (value) => update(
+                      _fields[key]!.copyWith(localizeRelativeTime: value),
+                    ),
+            ),
+          const SizedBox(height: 12),
           TextFormField(
             initialValue: rule.pattern,
             enabled: !_busy,
@@ -372,7 +390,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             decoration: const InputDecoration(
               labelText: '正規表現（任意）',
               hintText: r'(\d+(?:\.\d+)?)',
-              helperText: '空欄なら取得値をそのまま使用。最初の一致を使います。',
+              helperText: '空欄なら正規表現による整形なし。日本語化がONの場合は、その後の文字列に適用。',
               helperMaxLines: 3,
               border: OutlineInputBorder(),
             ),
