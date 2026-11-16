@@ -11,6 +11,14 @@ import 'relative_time_text.dart';
 
 enum ListValueMode { text, attribute, cssUrl }
 
+const workDetailLabels = <String, String>{
+  'title': '作品タイトル',
+  'thumbnail': '作品の表紙',
+  'description': '作品の説明',
+  'tags': 'タグ',
+  'chapterNumber': '並び替え用の話数',
+};
+
 const listFieldLabels = <String, String>{
   'title': 'タイトル',
   'url': 'リンク',
@@ -131,6 +139,7 @@ class ListExtractionRule {
     required this.fields,
     this.kind = 'works',
     this.acquisition = 'staticHtml',
+    this.details = const <String, ListFieldRule>{},
   });
 
   static const qrPrefix = 'ocr-list:3:';
@@ -140,6 +149,7 @@ class ListExtractionRule {
   final Map<String, ListFieldRule> fields;
   final String kind;
   final String acquisition;
+  final Map<String, ListFieldRule> details;
 
   void validate() {
     htmlProbeUri(pageUrl);
@@ -166,7 +176,16 @@ class ListExtractionRule {
       }
     }
 
-    for (final field in fields.values) {
+    if (details.keys.any((key) => !workDetailLabels.containsKey(key))) {
+      throw const FormatException('未対応の作品詳細項目です');
+    }
+    for (final entry in details.entries) {
+      if (entry.value.enabled && entry.value.selector.trim().isEmpty) {
+        throw FormatException('${workDetailLabels[entry.key]}のセレクターが空です');
+      }
+    }
+
+    for (final field in [...fields.values, ...details.values]) {
       validateListTransform(field.pattern, field.replacement);
       if (field.selector.length > 2048 || field.attribute.length > 128) {
         throw const FormatException('項目設定が長すぎます');
@@ -182,12 +201,14 @@ class ListExtractionRule {
 
   Map<String, dynamic> toJson() => {
     'format': 'offline-comic-reader.list-extraction',
-    'version': 3,
+    'version': details.isEmpty ? 3 : 4,
     'pageUrl': pageUrl,
     'kind': kind,
     'acquisition': acquisition,
     'groupSelector': groupSelector,
     'fields': fields.map((key, value) => MapEntry(key, value.toJson())),
+    if (details.isNotEmpty)
+      'details': details.map((key, value) => MapEntry(key, value.toJson())),
   };
 
   String encodeJson() {
@@ -197,8 +218,9 @@ class ListExtractionRule {
 
   String encodeQr() {
     validate();
+    final exportPrefix = details.isEmpty ? qrPrefix : 'ocr-list:4:';
     final value =
-        '$qrPrefix${base64Url.encode(utf8.encode(jsonEncode(toJson())))}';
+        '$exportPrefix${base64Url.encode(utf8.encode(jsonEncode(toJson())))}';
 
     if (value.length > 1500) {
       throw const FormatException('この設定はQRの初版上限を超えています。JSONで共有してください');
@@ -213,7 +235,9 @@ class ListExtractionRule {
       throw const FormatException('設定が大きすぎます');
     }
 
-    final prefix = value.startsWith(qrPrefix)
+    final prefix = value.startsWith('ocr-list:4:')
+        ? 'ocr-list:4:'
+        : value.startsWith(qrPrefix)
         ? qrPrefix
         : value.startsWith('ocr-list:2:')
         ? 'ocr-list:2:'
@@ -234,7 +258,7 @@ class ListExtractionRule {
     final data = Map<String, dynamic>.from(jsonDecode(value) as Map);
 
     if (data['format'] != 'offline-comic-reader.list-extraction' ||
-        !const [1, 2, 3].contains(data['version']) ||
+        !const [1, 2, 3, 4].contains(data['version']) ||
         data.keys.any(
           (key) => !const {
             'format',
@@ -244,11 +268,19 @@ class ListExtractionRule {
             'acquisition',
             'groupSelector',
             'fields',
+            'details',
           }.contains(key),
         )) {
       throw const FormatException('未対応の一覧ルールです');
     }
 
+    if (data.containsKey('details') && data['version'] != 4) {
+      throw const FormatException('作品詳細設定にはバージョン4が必要です');
+    }
+
+    final rawDetails = Map<String, dynamic>.from(
+      (data['details'] ?? const <String, dynamic>{}) as Map,
+    );
     final rawFields = Map<String, dynamic>.from(data['fields'] as Map);
 
     // 旧形式に存在しなかった項目だけを補う。
@@ -263,6 +295,12 @@ class ListExtractionRule {
       groupSelector: data['groupSelector'] as String,
       kind: data['kind'] as String,
       acquisition: data['acquisition'] as String,
+      details: rawDetails.map(
+        (key, value) => MapEntry(
+          key,
+          ListFieldRule.fromJson(Map<String, dynamic>.from(value as Map)),
+        ),
+      ),
       fields: rawFields.map(
         (key, value) => MapEntry(
           key,

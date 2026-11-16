@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'html_probe.dart';
 import 'list_extraction_rule.dart';
 import 'site_rule_store.dart';
+import 'work_page_details.dart';
 
 typedef RulePageFetcher =
     Future<HtmlProbePage> Function(
@@ -27,6 +28,7 @@ class RuleBrowseItem {
     required this.date,
     required this.latestChapter,
     required this.issues,
+    this.chapterNumber = '',
   });
 
   final String title;
@@ -35,6 +37,7 @@ class RuleBrowseItem {
   final String date;
   final String latestChapter;
   final List<String> issues;
+  final String chapterNumber;
 }
 
 class RuleBrowseResult {
@@ -42,11 +45,13 @@ class RuleBrowseResult {
     required this.pageUri,
     required this.total,
     required this.items,
+    this.workDetails = const WorkPageDetails(),
   });
 
   final Uri pageUri;
   final int total;
   final List<RuleBrowseItem> items;
+  final WorkPageDetails workDetails;
 }
 
 class RuleBrowseClient {
@@ -138,6 +143,7 @@ class RuleBrowseClient {
       fields: Map.of(template.fields),
       kind: template.kind,
       acquisition: template.acquisition,
+      details: Map.of(template.details),
     );
 
     final report = await extractListRowsSafely(
@@ -151,6 +157,16 @@ class RuleBrowseClient {
       throw const FormatException('一覧が5000件を超えました。取得範囲やページ分割の設定が必要です');
     }
 
+    var workDetails = const WorkPageDetails();
+    if (kind == 'chapters' && effectiveRule.details.isNotEmpty) {
+      try {
+        workDetails = await extractWorkPageDetailsSafely(page, effectiveRule);
+      } catch (error) {
+        workDetails = WorkPageDetails(issues: ['作品詳細：$error']);
+      }
+    }
+    _checkCancelled(cancelToken);
+
     final nextTemplate = kind == 'works' ? site.rules['chapters'] : null;
     final linkOrigin = nextTemplate == null
         ? finalUri.origin
@@ -158,7 +174,8 @@ class RuleBrowseClient {
 
     final items = <RuleBrowseItem>[];
 
-    for (final row in report.rows) {
+    for (var index = 0; index < report.rows.length; index++) {
+      final row = report.rows[index];
       final issues = List<String>.of(row.issues);
       final title = row.values['title']?.trim() ?? '';
       Uri? url;
@@ -195,6 +212,9 @@ class RuleBrowseClient {
           thumbnail: thumbnail,
           date: row.values['date'] ?? '',
           latestChapter: row.values['latestChapter'] ?? '',
+          chapterNumber: index < workDetails.chapterNumbers.length
+              ? workDetails.chapterNumbers[index]
+              : '',
           issues: List.unmodifiable(issues),
         ),
       );
@@ -204,6 +224,7 @@ class RuleBrowseClient {
       pageUri: finalUri,
       total: report.total,
       items: List.unmodifiable(items),
+      workDetails: workDetails,
     );
   }
 

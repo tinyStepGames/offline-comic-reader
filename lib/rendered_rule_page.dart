@@ -53,11 +53,17 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
 
     widget.cancelToken.whenCancel.then((_) {
       if (!mounted || _finished) return;
+
+      // 先に終了扱いにし、取得完了側との二重終了を防ぐ。
       _finished = true;
       _timer?.cancel();
-      if (ModalRoute.of(context)?.isCurrent == true) {
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ModalRoute.of(context)?.isCurrent != true) return;
         Navigator.of(context).pop();
-      }
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
     });
   }
 
@@ -243,7 +249,15 @@ class _RenderedRulePageState extends State<RenderedRulePage> {
 
       _finished = true;
       _timer?.cancel();
-      if (mounted) Navigator.of(context).pop(page);
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (ModalRoute.of(context)?.isCurrent != true) return;
+
+        // 完了後、画面を閉じるまでにキャンセルされた場合は結果を返さない。
+        Navigator.of(context).pop(widget.cancelToken.isCancelled ? null : page);
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
     } catch (error) {
       if (mounted && !_finished) {
         setState(() {

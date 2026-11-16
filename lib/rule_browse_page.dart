@@ -7,6 +7,8 @@ import 'services/html_probe.dart';
 import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
 import 'services/site_rule_store.dart';
+import 'services/work_page_details.dart';
+import 'work_details_panel.dart';
 
 class RuleBrowsePage extends StatefulWidget {
   const RuleBrowsePage({
@@ -15,12 +17,14 @@ class RuleBrowsePage extends StatefulWidget {
     this.kind = 'works',
     this.targetUrl,
     this.workTitle,
+    this.workThumbnail,
   });
 
   final SavedSiteRule site;
   final String kind;
   final String? targetUrl;
   final String? workTitle;
+  final Uri? workThumbnail;
 
   @override
   State<RuleBrowsePage> createState() => _RuleBrowsePageState();
@@ -35,13 +39,93 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   int _generation = 0;
 
   bool _collection = false;
+  ChapterListOrder _chapterOrder = ChapterListOrder.source;
+
+  List<RuleBrowseItem> get _visibleItems => _isWorks
+      ? (_result?.items ?? const <RuleBrowseItem>[])
+      : sortChapterItems<RuleBrowseItem>(
+          _result?.items ?? const <RuleBrowseItem>[],
+          (item) => item.chapterNumber,
+          _chapterOrder,
+        );
+
+  Widget _workSection() {
+    final details = _result!.workDetails;
+    final hasNumbers = _result!.items.any(
+      (item) => parseChapterNumber(item.chapterNumber) != null,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          WorkDetailsPanel(
+            details: details,
+            fallbackTitle: widget.workTitle ?? '',
+            fallbackThumbnail: widget.workThumbnail,
+          ),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<ChapterListOrder>(
+            initialValue: _chapterOrder,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'チャプターの並び順',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem(
+                value: ChapterListOrder.source,
+                child: Text('サイト順'),
+              ),
+              const DropdownMenuItem(
+                value: ChapterListOrder.reverse,
+                child: Text('サイト順の逆順'),
+              ),
+              DropdownMenuItem(
+                value: ChapterListOrder.ascending,
+                enabled: hasNumbers,
+                child: const Text('話数の昇順'),
+              ),
+              DropdownMenuItem(
+                value: ChapterListOrder.descending,
+                enabled: hasNumbers,
+                child: const Text('話数の降順'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) {
+                setState(() => _chapterOrder = value);
+              }
+            },
+          ),
+          if (!hasNumbers)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                '数値順を使う場合は、サイトルールの'
+                '「作品詳細・並び替え」で話数を設定してください。',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   bool get _isWorks => widget.kind == 'works';
 
   @override
   void initState() {
     super.initState();
-    _load();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent != true) return;
+      _load();
+    });
   }
 
   Future<HtmlProbePage> _fetchRendered(
@@ -52,6 +136,16 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }) async {
     if (!mounted || cancelToken.isCancelled) {
       throw StateError('取得を中止しました');
+    }
+
+    // 呼び出し元の描画処理が終わってから取得画面を開く。
+    await WidgetsBinding.instance.endOfFrame;
+
+    if (!mounted || cancelToken.isCancelled) {
+      throw StateError('取得を中止しました');
+    }
+    if (ModalRoute.of(context)?.isCurrent != true) {
+      throw StateError('一覧画面を離れたため取得を中止しました');
     }
 
     final page = await Navigator.of(context).push<HtmlProbePage>(
@@ -132,6 +226,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             kind: 'chapters',
             targetUrl: url.toString(),
             workTitle: item.title,
+            workThumbnail: item.thumbnail,
           ),
         ),
       );
@@ -325,6 +420,8 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverToBoxAdapter(child: _header()),
           ),
+          if (!_isWorks && !_busy && _result != null)
+            SliverToBoxAdapter(child: _workSection()),
           if (_isWorks && _collection)
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
@@ -338,7 +435,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (_, index) => _item(_result!.items[index]),
+                  (_, index) => _item(_visibleItems[index]),
                   childCount: _result?.items.length ?? 0,
                 ),
               ),

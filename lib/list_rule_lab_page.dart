@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'element_inspector_page.dart';
+import 'work_details_editor_page.dart';
 import 'services/download_store.dart';
 import 'services/html_probe.dart';
 import 'services/list_extraction_rule.dart';
@@ -48,6 +49,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
   String _kind = 'works';
   Map<String, ListFieldRule> _fields = defaultListFields();
   ListExtractionReport? _report;
+  Map<String, ListFieldRule> _details = {};
   bool _busy = false;
   bool _showImages = false;
   int _revision = 0;
@@ -74,6 +76,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       _kind = initial.kind;
       _acquisition = initial.acquisition;
       _fields = Map.of(initial.fields);
+      _details = Map.of(initial.details);
       _page = null;
       _status = '保存設定を開きました。HTML取得またはページから選択してください';
     }
@@ -83,9 +86,33 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     pageUrl: _url.text.trim(),
     groupSelector: _group.text.trim(),
     fields: Map.of(_fields),
+    details: Map.of(_details),
     kind: _kind,
     acquisition: _acquisition,
   );
+
+  Future<void> _editWorkDetails() async {
+    if (_busy) return;
+    FocusScope.of(context).unfocus();
+
+    final result = await Navigator.of(context).push<WorkDetailEditResult>(
+      MaterialPageRoute<WorkDetailEditResult>(
+        builder: (_) => WorkDetailsEditorPage(rule: _rule(), page: _page),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+    setState(() {
+      _details = Map.of(result.fields);
+      if (result.page != null) {
+        _page = result.page;
+        _url.text = result.page!.uri.toString();
+      }
+      if (result.usedRenderedDom) _acquisition = 'renderedDom';
+      _report = null;
+      _status = '作品詳細設定を反映しました。「サイトに保存」で確定してください';
+    });
+  }
 
   void _invalidate() {
     setState(() => _report = null);
@@ -339,6 +366,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       _kind = rule.kind;
       _acquisition = rule.acquisition;
       _fields = Map.of(rule.fields);
+      _details = Map.of(rule.details);
       _revision++;
       _report = null;
       _status = samePage
@@ -751,6 +779,14 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
               onChanged: (_) => _invalidate(),
             ),
             const SizedBox(height: 12),
+            if (_kind == 'chapters') ...[
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _editWorkDetails,
+                icon: const Icon(Icons.menu_book_outlined),
+                label: const Text('作品詳細・並び替えを設定'),
+              ),
+              const SizedBox(height: 12),
+            ],
             for (final entry in listFieldLabels.entries)
               _fieldEditor(entry.key, entry.value),
             const SizedBox(height: 12),
