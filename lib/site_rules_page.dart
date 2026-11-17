@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'list_rule_lab_page.dart';
+import 'site_bundle_page.dart';
 import 'rule_browse_page.dart';
 import 'rule_saved_downloads_page.dart';
 import 'chapter_image_lab_page.dart';
@@ -180,8 +181,26 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
     await _edit(site, imported.kind, imported: imported);
   }
 
+  Future<void> _transferSite([SavedSiteRule? site]) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) =>
+            SiteBundlePage(repository: _repository, initialSite: site),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
   Future<void> _menu(SavedSiteRule site, String action) async {
     if (_busy) return;
+
+    if (action == 'bundle') {
+      await _transferSite(site);
+      return;
+    }
 
     if (action == 'rename') {
       final name = await _askText(
@@ -264,6 +283,7 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
               enabled: !_busy,
               onSelected: (value) => _menu(site, value),
               itemBuilder: (_) => const [
+                PopupMenuItem(value: 'bundle', child: Text('サイト一式のJSON・QR')),
                 PopupMenuItem(value: 'rename', child: Text('名前変更')),
                 PopupMenuItem(value: 'duplicate', child: Text('複製')),
                 PopupMenuItem(value: 'delete', child: Text('削除')),
@@ -354,7 +374,12 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
               OutlinedButton.icon(
                 onPressed: _busy ? null : _import,
                 icon: const Icon(Icons.input),
-                label: const Text('一覧JSONを取り込む'),
+                label: const Text('単一の一覧JSONを取り込む'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : () => _transferSite(),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('サイト一式を取り込む'),
               ),
             ],
           ),

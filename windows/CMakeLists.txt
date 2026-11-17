@@ -115,3 +115,11 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# offline-comic-reader-gal-msvc-compat-v2
+# Compatibility for gal 2.3.2 with newer MSVC toolchains.
+if(MSVC AND TARGET gal_plugin)
+  target_compile_definitions(gal_plugin PRIVATE
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+  )
+endif()

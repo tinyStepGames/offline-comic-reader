@@ -287,6 +287,41 @@ class SiteRuleStore {
     return copy;
   });
 
+  /// 1サイト分を検証して一括保存する。
+  /// 更新時には取り込み先のIDを維持する。
+  Future<SavedSiteRule> importSiteBundle({
+    required SavedSiteRule incoming,
+    String? targetId,
+    DateTime? expectedUpdatedAt,
+  }) => _locked(() async {
+    final checked = SavedSiteRule.fromJson(incoming.toJson());
+    final sites = await _read();
+    final index = targetId == null ? -1 : _requiredIndex(sites, targetId);
+
+    if (index >= 0 &&
+        (expectedUpdatedAt == null ||
+            sites[index].updatedAt != expectedUpdatedAt.toUtc())) {
+      throw StateError(
+        '確認中に保存先の設定が変更されました。'
+        '取り込み画面を開き直してください',
+      );
+    }
+
+    final saved = SavedSiteRule.fromJson({
+      ...checked.toJson(),
+      'id': targetId ?? _newId(sites),
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    if (index < 0) {
+      sites.add(saved);
+    } else {
+      sites[index] = saved;
+    }
+
+    await _write(sites);
+    return saved;
+  });
   Future<void> delete(String id) => _locked(() async {
     final sites = await _read();
     final index = _requiredIndex(sites, id);
