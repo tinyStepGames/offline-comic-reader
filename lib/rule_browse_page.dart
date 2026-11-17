@@ -14,6 +14,7 @@ import 'services/chapter_reading_order.dart';
 import 'work_details_panel.dart';
 import 'rule_online_reader_page.dart';
 import 'rule_download_button.dart';
+import 'rule_batch_download_panel.dart';
 import 'rule_saved_downloads_page.dart';
 import 'services/rule_downloads.dart';
 
@@ -271,6 +272,17 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             fallbackTitle: widget.workTitle ?? '',
             fallbackThumbnail: widget.workThumbnail,
           ),
+          if (widget.targetUrl != null) ...[
+            const SizedBox(height: 16),
+            RuleBatchDownloadPanel(
+              site: widget.site,
+              workUrl: widget.targetUrl!,
+              workTitle: details.title.isNotEmpty
+                  ? details.title
+                  : widget.workTitle ?? '',
+              items: _result!.items,
+            ),
+          ],
           const SizedBox(height: 16),
           const Divider(),
           const SizedBox(height: 8),

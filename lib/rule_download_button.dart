@@ -116,7 +116,7 @@ class _RuleDownloadButtonState extends State<RuleDownloadButton> {
     final current = downloads?.state.value;
     final mine = current?.chapterId == widget.chapter.storageId;
     final active = mine && current?.running == true;
-    final busy = current?.running == true;
+    final busy = downloads?.isBusy ?? false;
 
     final String tooltip;
     if (active) {

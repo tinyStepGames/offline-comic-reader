@@ -16,6 +16,7 @@ import 'rule_browse_client.dart';
 import 'rule_content_client.dart';
 import 'saved_download_repository.dart';
 import 'site_rule_store.dart';
+import 'serial_download_batch.dart';
 
 final _ruleSiteId = RegExp(r'^[A-Za-z0-9_-]{22}$');
 
@@ -120,6 +121,25 @@ class RuleDownloads {
 
   final state = ValueNotifier<RuleTransferState>(const RuleTransferState());
 
+  final batch = SerialDownloadBatch<ComicChapter>();
+
+  bool _singleBusy = false;
+
+  bool get isBusy =>
+      _singleBusy || batch.state.value.running || state.value.running;
+
+  void _notifyTransferState() {
+    final current = state.value;
+    state.value = RuleTransferState(
+      chapterId: current.chapterId,
+      running: current.running,
+      done: current.done,
+      total: current.total,
+      message: current.message,
+      failed: current.failed,
+    );
+  }
+
   CancelToken? _token;
   DownloadStore? _transfer;
 
@@ -220,6 +240,80 @@ class RuleDownloads {
   }
 
   Future<void> save({
+    required SavedSiteRule site,
+    required ComicChapter chapter,
+    required String workTitle,
+    RenderedRulePageFetcher? renderedFetcher,
+  }) async {
+    if (isBusy) return;
+
+    _singleBusy = true;
+    try {
+      await _saveOne(
+        site: site,
+        chapter: chapter,
+        workTitle: workTitle,
+        renderedFetcher: renderedFetcher,
+      );
+    } finally {
+      _singleBusy = false;
+      _notifyTransferState();
+    }
+  }
+
+  Future<void> saveBatch({
+    required SavedSiteRule site,
+    required String workUrl,
+    required String workTitle,
+    required Iterable<ComicChapter> chapters,
+  }) async {
+    if (isBusy) {
+      throw StateError('別のダウンロードを実行中です');
+    }
+    if (site.images == null) {
+      throw const FormatException('本文画像ルールが未設定です');
+    }
+
+    final canonicalWork = htmlProbeUri(workUrl).toString();
+    final tasks = List<ComicChapter>.of(chapters);
+
+    // 別作品・別サイトが紛れた状態で保存を開始しない。
+    for (final chapter in tasks) {
+      _validateChapter(chapter);
+      if (chapter.sourceId != _sourceId(site.id) ||
+          chapter.workId != canonicalWork) {
+        throw const FormatException('一括保存に別作品のチャプターが含まれています');
+      }
+    }
+
+    try {
+      await batch.run(
+        tasks,
+        scope: jsonEncode([site.id, canonicalWork]),
+        keyOf: (chapter) => chapter.storageId,
+        titleOf: (chapter) => chapter.title,
+        isSaved: (chapter) async {
+          try {
+            return (await files(chapter)).isNotEmpty;
+          } catch (_) {
+            // 不足・破損のある保存はスキップせず、再構築する。
+            return false;
+          }
+        },
+        save: (chapter) async {
+          await _saveOne(site: site, chapter: chapter, workTitle: workTitle);
+
+          if (state.value.failed) {
+            throw StateError(state.value.message);
+          }
+        },
+      );
+    } finally {
+      _notifyTransferState();
+    }
+  }
+
+  Future<void> _saveOne({
     required SavedSiteRule site,
     required ComicChapter chapter,
     required String workTitle,
@@ -337,13 +431,15 @@ class RuleDownloads {
   }
 
   void stop() {
+    // 現在の話を止め、次の話への進行も止める。
+    batch.stop();
     if (!state.value.running) return;
     _token?.cancel('ユーザーによる保存中断');
     _transfer?.close();
   }
 
   Future<void> delete(SavedChapter item) async {
-    if (state.value.running) {
+    if (isBusy) {
       throw StateError('保存中は削除できません');
     }
 
