@@ -1,3 +1,8 @@
+import 'site_directory_pane.dart';
+import 'site_rules_page.dart';
+import 'rule_browse_page.dart';
+import 'services/site_rule_store.dart';
+import 'services/last_opened_site_store.dart';
 import 'html_rule_lab_page.dart';
 import 'saved_downloads_page.dart';
 import 'chapter_read_state_widgets.dart';
@@ -25,7 +30,169 @@ class SourceHome extends StatefulWidget {
 }
 
 class _SourceHomeState extends State<SourceHome> {
-  int _section = 0;
+  SavedSiteRule? _activeSite;
+  List<SavedSiteRule> _savedSites = [];
+  bool _sitesBusy = false;
+  String? _sitesError;
+
+  LastOpenedSiteStore get _lastSiteStore =>
+      LastOpenedSiteStore(widget.store.root);
+
+  Future<void> _initializeHome() async {
+    // 最初に選択サイトを復元する。
+    // 復元が終わるまでは作品一覧の取得を開始しない。
+    final remembered = await _lastSiteStore.read();
+
+    try {
+      final sites = await SiteRuleStore(widget.store.root).load();
+      if (!mounted) return;
+
+      _savedSites = sites;
+
+      if (remembered == LastOpenedSiteStore.builtinSiteId) {
+        _activeSite = null;
+        _section = 0;
+      } else {
+        SavedSiteRule? selected;
+
+        for (final site in sites) {
+          if (site.id == remembered && site.rules.containsKey('works')) {
+            selected = site;
+            break;
+          }
+        }
+
+        _activeSite = selected;
+        _section = selected == null ? 4 : 0;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _sitesError = 'サイト一覧を読み込めませんでした：$error';
+      _section = 4;
+    }
+
+    if (!mounted) return;
+    await _restoreTabs();
+  }
+
+  Future<void> _reloadSiteDirectory({bool restoreSelection = false}) async {
+    if (_sitesBusy) return;
+
+    setState(() {
+      _sitesBusy = true;
+      _sitesError = null;
+    });
+
+    try {
+      final sites = await SiteRuleStore(widget.store.root).load();
+      final remembered = restoreSelection ? await _lastSiteStore.read() : null;
+
+      if (!mounted) return;
+
+      setState(() {
+        _savedSites = sites;
+
+        if (restoreSelection &&
+            remembered == LastOpenedSiteStore.builtinSiteId) {
+          _activeSite = null;
+        } else {
+          final wantedId = restoreSelection && remembered != null
+              ? remembered
+              : _activeSite?.id;
+
+          SavedSiteRule? selected;
+
+          for (final site in sites) {
+            if (site.id == wantedId && site.rules.containsKey('works')) {
+              selected = site;
+              break;
+            }
+          }
+
+          if (wantedId != null) {
+            _activeSite = selected;
+
+            if (selected == null && _section == 0) {
+              _section = 4;
+            }
+          }
+        }
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _sitesError = 'サイト一覧を読み込めませんでした：$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sitesBusy = false);
+    }
+  }
+
+  Future<void> _selectSite(SavedSiteRule? site) async {
+    if (_loading) return;
+
+    if (site != null && !site.rules.containsKey('works')) {
+      await _openSiteManager(site);
+      return;
+    }
+
+    setState(() {
+      _activeSite = site;
+      _section = 0;
+    });
+
+    try {
+      await _lastSiteStore.write(site?.id ?? LastOpenedSiteStore.builtinSiteId);
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '起動サイトを保存できませんでした。'
+            '次回起動時に元のサイトへ戻る場合があります。',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openSiteManager([SavedSiteRule? site]) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            SiteRulesPage(store: widget.store, initialSiteId: site?.id),
+      ),
+    );
+
+    if (!mounted) return;
+    await _reloadSiteDirectory(restoreSelection: true);
+  }
+
+  Future<void> _openRuleLab() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => HtmlRuleLabPage(store: widget.store),
+      ),
+    );
+
+    if (!mounted) return;
+    await _reloadSiteDirectory(restoreSelection: true);
+  }
+
+  void _changeHomeSection(int navigationIndex) {
+    // 既存の棚の内部番号を維持し、表示順だけ変更する。
+    const sections = [0, 4, 1, 2, 3];
+
+    setState(() => _section = sections[navigationIndex]);
+
+    if (_section == 4) {
+      _reloadSiteDirectory();
+    }
+  }
+
+  int _section = 4;
   late List<SourceTab> _tabs;
   List<SourceTab> _knownTabs = [];
   bool _loading = true;
@@ -37,7 +204,7 @@ class _SourceHomeState extends State<SourceHome> {
     super.initState();
     _tabs = widget.adapter.defaultTabs;
     _knownTabs = List.of(_tabs);
-    _restoreTabs();
+    _initializeHome();
   }
 
   Future<void> _restoreTabs() async {
@@ -214,104 +381,140 @@ class _SourceHomeState extends State<SourceHome> {
 
   @override
   Widget build(BuildContext context) {
+    final customDiscovery = _section == 0 && _activeSite != null;
+
     final title = switch (_section) {
       1 => 'お気に入り',
       2 => '閲覧履歴',
       3 => '保存済み',
-      _ => widget.adapter.name,
+      4 => 'サイト一覧',
+      _ => _activeSite?.name ?? widget.adapter.name,
     };
+
+    const sections = [0, 4, 1, 2, 3];
 
     return DefaultTabController(
       key: ValueKey(_tabs.map((item) => item.id).join('|')),
       length: _tabs.length,
       child: Scaffold(
         backgroundColor: Colors.black,
-        appBar: AppBar(
-          backgroundColor: Colors.black,
-          title: Text(title),
-          actions: [
-            if (_section == 0)
-              IconButton(
-                tooltip: 'HTMLルール作成室',
-                onPressed: () {
-                  Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) => HtmlRuleLabPage(store: widget.store),
+
+        // 独自サイト側のAppBarを使い、上部バーの二重表示を避ける。
+        appBar: customDiscovery
+            ? null
+            : AppBar(
+                backgroundColor: Colors.black,
+                title: Text(title),
+                actions: [
+                  if (_section == 0 || _section == 4)
+                    IconButton(
+                      tooltip: 'HTMLルール制作室',
+                      onPressed: _loading ? null : _openRuleLab,
+                      icon: const Icon(Icons.code),
                     ),
-                  );
-                },
-                icon: const Icon(Icons.code),
-              ),
-            if (_section == 1)
-              TextButton.icon(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => FavoriteUpdatesPage(
-                        adapter: widget.adapter,
-                        store: widget.store,
-                        library: UserLibraryStore.forRoot(widget.store.root),
-                      ),
+                  if (_section == 4)
+                    IconButton(
+                      tooltip: 'サイト一覧を更新',
+                      onPressed: _loading || _sitesBusy
+                          ? null
+                          : () => _reloadSiteDirectory(),
+                      icon: const Icon(Icons.refresh),
                     ),
-                  );
-                },
-                icon: const Icon(Icons.fiber_new_outlined),
-                label: const Text('新着'),
+                  if (_section == 1)
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => FavoriteUpdatesPage(
+                              adapter: widget.adapter,
+                              store: widget.store,
+                              library: UserLibraryStore.forRoot(
+                                widget.store.root,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.fiber_new_outlined),
+                      label: const Text('新着'),
+                    ),
+                  if (_section == 0 && _activeSite == null)
+                    IconButton(
+                      tooltip: '言語タブを追加',
+                      onPressed: _loading ? null : _addTab,
+                      icon: const Icon(Icons.add),
+                    ),
+                ],
+                bottom: _section == 0 && _activeSite == null
+                    ? TabBar(
+                        isScrollable: true,
+                        tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+                      )
+                    : null,
               ),
-            if (_section == 0)
-              IconButton(
-                tooltip: '言語タブを追加',
-                onPressed: _loading ? null : _addTab,
-                icon: const Icon(Icons.add),
-              ),
-          ],
-          bottom: _section == 0
-              ? TabBar(
-                  isScrollable: true,
-                  tabs: [for (final tab in _tabs) Tab(text: tab.title)],
-                )
-              : null,
-        ),
-        body: IndexedStack(
-          index: _section,
-          children: [
-            _loading
-                ? const Center(child: CircularProgressIndicator())
-                : TabBarView(
-                    children: [
-                      for (final tab in _tabs)
-                        WorkListPage(
-                          key: ValueKey(tab.id),
-                          adapter: widget.adapter,
-                          store: widget.store,
-                          tab: tab,
-                        ),
-                    ],
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : IndexedStack(
+                index: _section,
+                children: [
+                  // サイト一覧表示中などは、未表示サイトの通信を始めない。
+                  _activeSite != null
+                      ? (_section == 0
+                            ? RuleBrowsePage(
+                                key: ValueKey(
+                                  'home-site:${_activeSite!.id}:'
+                                  '${_activeSite!.updatedAt.toIso8601String()}',
+                                ),
+                                site: _activeSite!,
+                              )
+                            : const SizedBox.shrink())
+                      : (_section == 0
+                            ? TabBarView(
+                                children: [
+                                  for (final tab in _tabs)
+                                    WorkListPage(
+                                      key: ValueKey(tab.id),
+                                      adapter: widget.adapter,
+                                      store: widget.store,
+                                      tab: tab,
+                                    ),
+                                ],
+                              )
+                            : const SizedBox.shrink()),
+                  LibraryShelf(
+                    library: UserLibraryStore.forRoot(widget.store.root),
+                    sourceId: widget.adapter.id,
+                    sourceName: widget.adapter.name,
+                    history: false,
+                    onOpen: _openFavorite,
                   ),
-            LibraryShelf(
-              library: UserLibraryStore.forRoot(widget.store.root),
-              sourceId: widget.adapter.id,
-              sourceName: widget.adapter.name,
-              history: false,
-              onOpen: _openFavorite,
-            ),
-            LibraryShelf(
-              library: UserLibraryStore.forRoot(widget.store.root),
-              sourceId: widget.adapter.id,
-              sourceName: widget.adapter.name,
-              history: true,
-              onOpen: _openHistory,
-            ),
-            SavedDownloadsPane(
-              adapter: widget.adapter,
-              store: widget.store,
-              active: _section == 3,
-            ),
-          ],
-        ),
+                  LibraryShelf(
+                    library: UserLibraryStore.forRoot(widget.store.root),
+                    sourceId: widget.adapter.id,
+                    sourceName: widget.adapter.name,
+                    history: true,
+                    onOpen: _openHistory,
+                  ),
+                  SavedDownloadsPane(
+                    adapter: widget.adapter,
+                    store: widget.store,
+                    active: _section == 3,
+                  ),
+                  SiteDirectoryPane(
+                    sites: _savedSites,
+                    activeSiteId: _activeSite?.id,
+                    busy: _sitesBusy,
+                    error: _sitesError,
+                    onOpen: (site) => _selectSite(site),
+                    onManage: (site) => _openSiteManager(site),
+                    onLab: _openRuleLab,
+                    onRefresh: () => _reloadSiteDirectory(),
+                  ),
+                ],
+              ),
         bottomNavigationBar: BottomNavigationBar(
-          currentIndex: _section,
-          onTap: (value) => setState(() => _section = value),
+          currentIndex: sections.indexOf(_section),
+          onTap: _loading ? null : _changeHomeSection,
           type: BottomNavigationBarType.fixed,
           backgroundColor: const Color(0xFF1A1A1A),
           selectedItemColor: Colors.lightBlueAccent,
@@ -320,6 +523,7 @@ class _SourceHomeState extends State<SourceHome> {
           unselectedFontSize: 12,
           items: const [
             BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '発見'),
+            BottomNavigationBarItem(icon: Icon(Icons.language), label: 'サイト'),
             BottomNavigationBarItem(
               icon: Icon(Icons.star_border),
               activeIcon: Icon(Icons.star),

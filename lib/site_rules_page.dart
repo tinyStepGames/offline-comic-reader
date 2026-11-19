@@ -1,3 +1,4 @@
+import 'services/last_opened_site_store.dart';
 import 'package:flutter/material.dart';
 
 import 'list_rule_lab_page.dart';
@@ -10,7 +11,9 @@ import 'services/list_extraction_rule.dart';
 import 'services/site_rule_store.dart';
 
 class SiteRulesPage extends StatefulWidget {
-  const SiteRulesPage({super.key, required this.store});
+  const SiteRulesPage({super.key, required this.store, this.initialSiteId});
+
+  final String? initialSiteId;
   final DownloadStore store;
 
   @override
@@ -140,6 +143,18 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
 
   Future<void> _browse(SavedSiteRule site) async {
     if (_busy) return;
+
+    try {
+      await LastOpenedSiteStore(widget.store.root).write(site.id);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('起動サイトを保存できませんでした')));
+    }
+
+    if (!mounted) return;
+
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => RuleBrowsePage(site: site)),
     );
@@ -402,7 +417,10 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
                 '既存の一覧編集画面から「サイトに保存」することもできます。',
               ),
             ),
-          for (final site in _sites)
+          for (final site in _sites.where(
+            (site) =>
+                widget.initialSiteId == null || site.id == widget.initialSiteId,
+          ))
             KeyedSubtree(key: ValueKey(site.id), child: _card(site)),
         ],
       ),

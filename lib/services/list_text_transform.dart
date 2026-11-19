@@ -28,7 +28,14 @@ Iterable<int> _references(String template) sync* {
   }
 }
 
+/// コピー・貼り付け等で境界に付いた実際のCR/LFのみを除く。
+/// 正規表現中の文字列としての \r や \n は変更しない。
+String _trimTransformBoundaryLineBreaks(String value) =>
+    value.replaceAll(RegExp(r'^[\r\n]+|[\r\n]+$'), '');
+
 void validateListTransform(String pattern, String replacement) {
+  pattern = _trimTransformBoundaryLineBreaks(pattern);
+  replacement = _trimTransformBoundaryLineBreaks(replacement);
   if (pattern.length > 512 || replacement.length > 2048) {
     throw const FormatException('正規表現または整形テンプレートが長すぎます');
   }
@@ -44,6 +51,8 @@ String transformListText(
   required String pattern,
   required String replacement,
 }) {
+  pattern = _trimTransformBoundaryLineBreaks(pattern);
+  replacement = _trimTransformBoundaryLineBreaks(replacement);
   validateListTransform(pattern, replacement);
   if (pattern.isEmpty) return input;
 

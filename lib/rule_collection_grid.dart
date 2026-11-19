@@ -165,14 +165,9 @@ class _CollectionCard extends StatelessWidget {
                       : Image.network(
                           thumbnail.toString(),
                           fit: BoxFit.cover,
-                          cacheWidth:
-                              (MediaQuery.devicePixelRatioOf(context) *
-                                      coverHeight *
-                                      2 /
-                                      3)
-                                  .round()
-                                  .clamp(1, 1200)
-                                  .toInt(),
+                          // collection-cover-original-resolution-v1
+                          // 横長画像を幅だけで縮小してから再拡大しない。
+                          filterQuality: FilterQuality.medium,
                           frameBuilder:
                               (context, child, frame, wasSynchronouslyLoaded) {
                                 if (wasSynchronouslyLoaded || frame != null) {
