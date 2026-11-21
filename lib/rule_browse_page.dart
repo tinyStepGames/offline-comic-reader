@@ -1,3 +1,4 @@
+import 'site_search_page.dart';
 import 'services/work_tag_link.dart';
 import 'services/tag_browse_plan.dart';
 import 'package:dio/dio.dart';
@@ -30,9 +31,11 @@ class RuleBrowsePage extends StatefulWidget {
     this.workThumbnail,
     this.listTitle,
     this.pagingNotice,
+    this.navigationSite,
   });
 
   final SavedSiteRule site;
+  final SavedSiteRule? navigationSite;
   final String kind;
   final String? targetUrl;
   final String? workTitle;
@@ -345,7 +348,10 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     _openingItem = true;
 
     try {
-      final plan = await makeTagBrowsePlanSafely(widget.site, tag);
+      final plan = await makeTagBrowsePlanSafely(
+        widget.navigationSite ?? widget.site,
+        tag,
+      );
       if (!mounted) return;
 
       await Navigator.of(context).push<void>(
@@ -363,6 +369,22 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           context,
         ).showSnackBar(SnackBar(content: Text('タグ一覧を開けませんでした：$error')));
       }
+    } finally {
+      _openingItem = false;
+    }
+  }
+
+  Future<void> _openSearch() async {
+    if (_busy || _openingItem) return;
+    _openingItem = true;
+
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              SiteSearchPage(site: widget.navigationSite ?? widget.site),
+        ),
+      );
     } finally {
       _openingItem = false;
     }
@@ -558,7 +580,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         await Navigator.of(context).push<void>(
           MaterialPageRoute<void>(
             builder: (_) => RuleBrowsePage(
-              site: widget.site,
+              site: widget.navigationSite ?? widget.site,
               kind: 'chapters',
               targetUrl: url.toString(),
               workTitle: item.title,
@@ -755,6 +777,13 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             : widget.workTitle ?? 'チャプター一覧',
       ),
       actions: [
+        if (_isWorks &&
+            (widget.navigationSite ?? widget.site).searchSettings != null)
+          IconButton(
+            tooltip: 'このサイトを検索',
+            onPressed: _busy || _openingItem ? null : _openSearch,
+            icon: const Icon(Icons.search),
+          ),
         IconButton(
           tooltip: '保存済みを開く',
           onPressed: () {

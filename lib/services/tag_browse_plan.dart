@@ -134,6 +134,7 @@ TagBrowsePlan makeTagBrowsePlan(
       updatedAt: site.updatedAt,
       images: site.images,
       tagNavigation: site.tagNavigation,
+      searchSettings: site.searchSettings,
     ),
     notice: pagination == null
         ? 'このページ送り形式はタグURLへ安全に適用できないため、'

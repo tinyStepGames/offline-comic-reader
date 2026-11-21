@@ -1,3 +1,4 @@
+import 'site_search_settings.dart';
 import 'tag_navigation_settings.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -16,6 +17,7 @@ class SavedSiteRule {
     required this.updatedAt,
     this.images,
     this.tagNavigation,
+    this.searchSettings,
   });
 
   final String id;
@@ -24,6 +26,7 @@ class SavedSiteRule {
   final DateTime updatedAt;
   final ChapterImageSettings? images;
   final TagNavigationSettings? tagNavigation;
+  final SiteSearchSettings? searchSettings;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -32,6 +35,7 @@ class SavedSiteRule {
     'rules': rules.map((key, rule) => MapEntry(key, rule.toJson())),
     if (images != null) 'images': images!.toJson(),
     if (tagNavigation != null) 'tagNavigation': tagNavigation!.toJson(),
+    if (searchSettings != null) 'searchSettings': searchSettings!.toJson(),
   };
 
   factory SavedSiteRule.fromJson(Map<String, dynamic> data) {
@@ -43,6 +47,7 @@ class SavedSiteRule {
         'rules',
         'images',
         'tagNavigation',
+        'searchSettings',
       }.contains(key),
     )) {
       throw const FormatException('未対応のサイト保存項目です');
@@ -80,6 +85,13 @@ class SavedSiteRule {
           );
     tagNavigation?.validateFor(rules.values);
 
+    final searchSettings = data['searchSettings'] == null
+        ? null
+        : SiteSearchSettings.fromJson(
+            Map<String, dynamic>.from(data['searchSettings'] as Map),
+          );
+    searchSettings?.validateFor(rules);
+
     return SavedSiteRule(
       id: id,
       name: name,
@@ -87,6 +99,7 @@ class SavedSiteRule {
       updatedAt: updatedAt.toUtc(),
       images: images,
       tagNavigation: tagNavigation,
+      searchSettings: searchSettings,
     );
   }
 }
@@ -167,6 +180,7 @@ class SiteRuleStore {
     }
 
     for (final site in sites) {
+      site.searchSettings?.validateFor(site.rules);
       site.images?.validateOrigins(
         site.rules.values.map((rule) => rule.pageUrl),
       );
@@ -234,6 +248,7 @@ class SiteRuleStore {
       id: id ?? _newId(sites),
       images: index >= 0 ? sites[index].images : null,
       tagNavigation: index >= 0 ? sites[index].tagNavigation : null,
+      searchSettings: index >= 0 ? sites[index].searchSettings : null,
       name: checkedName,
       rules: Map.unmodifiable(rules),
       updatedAt: DateTime.now().toUtc(),
@@ -266,6 +281,7 @@ class SiteRuleStore {
       rules: old.rules,
       images: checked,
       tagNavigation: old.tagNavigation,
+      searchSettings: old.searchSettings,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -286,6 +302,7 @@ class SiteRuleStore {
       rules: old.rules,
       images: old.images,
       tagNavigation: old.tagNavigation,
+      searchSettings: old.searchSettings,
       updatedAt: DateTime.now().toUtc(),
     );
     await _write(sites);
@@ -374,10 +391,46 @@ class SiteRuleStore {
       rules: old.rules,
       images: old.images,
       tagNavigation: checked,
+      searchSettings: old.searchSettings,
       updatedAt: DateTime.now().toUtc(),
     );
 
     sites[index] = saved;
+    await _write(sites);
+    return saved;
+  });
+
+  /// 検索設定だけを保存する。nullなら検索設定だけ削除する。
+  Future<SavedSiteRule> saveSearchSettings({
+    required String id,
+    required SiteSearchSettings? settings,
+    required DateTime expectedUpdatedAt,
+  }) => _locked(() async {
+    final sites = await _read();
+    final index = _requiredIndex(sites, id);
+    final old = sites[index];
+
+    if (old.updatedAt != expectedUpdatedAt.toUtc()) {
+      throw StateError('編集中にサイト設定が変更されました。画面を開き直してください');
+    }
+
+    final checked = settings == null
+        ? null
+        : SiteSearchSettings.fromJson(settings.toJson());
+
+    checked?.validateFor(old.rules);
+
+    final data = old.toJson();
+    if (checked == null) {
+      data.remove('searchSettings');
+    } else {
+      data['searchSettings'] = checked.toJson();
+    }
+    data['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+
+    final saved = SavedSiteRule.fromJson(data);
+    sites[index] = saved;
+
     await _write(sites);
     return saved;
   });

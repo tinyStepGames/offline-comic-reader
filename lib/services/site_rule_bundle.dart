@@ -29,8 +29,12 @@ class SiteRuleBundle {
 
   Map<String, dynamic> toJson() => {
     'format': format,
-    'version': site.tagNavigation == null ? 1 : 2,
+    'version': site.searchSettings != null
+        ? 3
+        : (site.tagNavigation == null ? 1 : 2),
     'name': site.name,
+    if (site.searchSettings != null)
+      'searchSettings': site.searchSettings!.toJson(),
     'rules': site.rules.map((key, value) => MapEntry(key, value.toJson())),
     if (site.images != null) 'images': site.images!.toJson(),
     if (site.tagNavigation != null)
@@ -106,7 +110,7 @@ class SiteRuleBundle {
       final data = Map<String, dynamic>.from(value);
 
       if (data['format'] != format ||
-          !const [1, 2].contains(data['version']) ||
+          !const [1, 2, 3].contains(data['version']) ||
           data.keys.any(
             (key) => !const {
               'format',
@@ -115,13 +119,19 @@ class SiteRuleBundle {
               'rules',
               'images',
               'tagNavigation',
+              'searchSettings',
             }.contains(key),
           )) {
         throw const FormatException('未対応のサイト一式形式です');
       }
 
-      if (data.containsKey('tagNavigation') && data['version'] != 2) {
+      if (data.containsKey('tagNavigation') &&
+          !const [2, 3].contains(data['version'])) {
         throw const FormatException('タグ先設定を含む共有JSONにはバージョン2が必要です');
+      }
+
+      if (data.containsKey('searchSettings') && data['version'] != 3) {
+        throw const FormatException('検索設定を含む共有JSONにはバージョン3が必要です');
       }
 
       // 共有元のIDと保存日時は移植しない。
@@ -131,6 +141,8 @@ class SiteRuleBundle {
         'name': data['name'],
         'updatedAt': '2000-01-01T00:00:00.000Z',
         'rules': data['rules'],
+        if (data.containsKey('searchSettings'))
+          'searchSettings': data['searchSettings'],
         if (data.containsKey('images')) 'images': data['images'],
         if (data.containsKey('tagNavigation'))
           'tagNavigation': data['tagNavigation'],
@@ -201,6 +213,7 @@ Future<RuleBrowseResult> checkSiteBundleStatic(
     rules: {...site.rules, kind: staticRule},
     images: site.images,
     tagNavigation: site.tagNavigation,
+    searchSettings: site.searchSettings,
   );
 
   final client = RuleBrowseClient(fetcher: fetcher);

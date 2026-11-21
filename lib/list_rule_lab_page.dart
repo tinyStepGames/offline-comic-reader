@@ -22,6 +22,7 @@ class ListRuleLabPage extends StatefulWidget {
     this.initialRule,
     this.savedSite,
     this.onSaveRule,
+    this.rulePurpose = 'タグ先',
   });
 
   final DownloadStore store;
@@ -32,6 +33,7 @@ class ListRuleLabPage extends StatefulWidget {
   final ListExtractionRule? initialRule;
   final SavedSiteRule? savedSite;
   final Future<void> Function(ListExtractionRule rule)? onSaveRule;
+  final String rulePurpose;
 
   @override
   State<ListRuleLabPage> createState() => _ListRuleLabPageState();
@@ -281,7 +283,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
         rule.validate();
 
         if (rule.kind != 'works') {
-          throw const FormatException('タグ先は作品一覧として設定してください');
+          throw const FormatException('専用の一覧ルールは作品一覧として設定してください');
         }
 
         await widget.onSaveRule!(rule);
@@ -289,7 +291,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
         if (mounted) {
           setState(() {
             _status =
-                'タグ先の一覧ルールとURL変換設定を保存しました。'
+                '専用の一覧設定を保存しました。'
                 'この画面で保存は完了しています。追加の保存操作は不要です。';
           });
         }
@@ -382,7 +384,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
   void _apply(ListExtractionRule rule) {
     if (widget.onSaveRule != null && rule.kind != 'works') {
-      throw const FormatException('タグ先には作品一覧ルールを取り込んでください');
+      throw const FormatException('専用設定には作品一覧ルールを取り込んでください');
     }
     final samePage =
         _page?.uri.toString() == rule.pageUrl &&
@@ -689,7 +691,9 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.onSaveRule == null ? '一覧ルール' : 'タグ先の一覧ルール'),
+        title: Text(
+          widget.onSaveRule == null ? '一覧ルール' : '${widget.rulePurpose}の一覧ルール',
+        ),
         actions: [
           IconButton(
             tooltip: '下書きを復元',

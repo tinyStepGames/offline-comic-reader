@@ -1,3 +1,5 @@
+import 'site_search_editor_page.dart';
+import 'site_search_page.dart';
 import 'tag_navigation_editor_page.dart';
 import 'services/last_opened_site_store.dart';
 import 'package:flutter/material.dart';
@@ -119,6 +121,18 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           initialRule: rule,
           savedSite: site,
         ),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _editSearch(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => SiteSearchEditorPage(store: widget.store, site: site),
       ),
     );
 
@@ -344,6 +358,38 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
                   },
           ),
           _slot(site, 'works', '作品一覧'),
+          ListTile(
+            leading: Icon(
+              site.searchSettings == null
+                  ? Icons.search
+                  : Icons.check_circle_outline,
+            ),
+            title: const Text('検索設定'),
+            subtitle: Text(
+              site.searchSettings == null
+                  ? '未設定・タップして設定'
+                  : '設定済み・タップして編集\n'
+                        '${site.searchSettings!.urlTemplate}',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: _busy ? null : () => _editSearch(site),
+            trailing: site.searchSettings == null
+                ? null
+                : IconButton(
+                    tooltip: 'このサイトを検索',
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => SiteSearchPage(site: site),
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.search),
+                  ),
+          ),
           ListTile(
             leading: Icon(
               site.tagNavigation == null
