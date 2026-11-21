@@ -36,5 +36,6 @@ SavedSiteRule makeSiteSearchPlan(SavedSiteRule site, String keyword) {
     images: site.images,
     tagNavigation: site.tagNavigation,
     searchSettings: settings,
+    browseTabs: site.browseTabs,
   );
 }

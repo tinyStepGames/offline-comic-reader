@@ -22,6 +22,7 @@ class ReaderPage extends StatefulWidget {
     this.onPreviousChapter,
     this.onNextChapter,
     this.chapterStateAction,
+    this.onOpened,
   });
 
   final List<File> files;
@@ -31,6 +32,10 @@ class ReaderPage extends StatefulWidget {
   final VoidCallback? onPreviousChapter;
   final VoidCallback? onNextChapter;
   final Widget? chapterStateAction;
+
+  /// 本文画像を一度表示したことを通知する。
+  /// 最後まで読んだことを意味するものではない。
+  final VoidCallback? onOpened;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
@@ -48,6 +53,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   late final ReaderLookAhead _lookAhead;
   final Set<int> _networkReady = <int>{};
+
+  // 初回表示までは、復元した現在ページの画像を優先する。
+  // 画面外の先読みは既存のReaderLookAheadに任せる。
+  bool _initialNetworkImageReady = false;
+  final Stopwatch _readerOpenClock = Stopwatch()..start();
 
   int get _readerDecodeWidth {
     final media = MediaQuery.maybeOf(context);
@@ -86,10 +96,42 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _lookAhead.update(targets);
   }
 
+  bool _chapterOpenedNotified = false;
+
+  void _notifyChapterOpened() {
+    if (_chapterOpenedNotified) return;
+    _chapterOpenedNotified = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onOpened?.call();
+    });
+  }
+
   void _onNetworkReady(int index) {
     if (!mounted) return;
+
     _networkReady.add(index);
+
     if (index == _index) {
+      _notifyChapterOpened();
+
+      if (!_initialNetworkImageReady) {
+        setState(() {
+          _initialNetworkImageReady = true;
+        });
+
+        assert(() {
+          debugPrint(
+            '[reader-image] '
+            'first_active_frame=${_readerOpenClock.elapsedMilliseconds}ms '
+            'page=${index + 1} '
+            'count=$_count',
+          );
+          return true;
+        }());
+      }
+
       _updateLookAhead();
     }
   }
@@ -136,6 +178,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   Future<void> _restore() async {
+    final restoreClock = Stopwatch()..start();
     ReadingProgress? saved;
 
     final key = widget.progressKey;
@@ -165,6 +208,17 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
 
     setState(() => _ready = true);
+
+    assert(() {
+      debugPrint(
+        '[reader-state] '
+        'restore=${restoreClock.elapsedMilliseconds}ms '
+        'page=${_index + 1} '
+        'count=$_count '
+        'mode=${_mode.name}',
+      );
+      return true;
+    }());
   }
 
   void _onVisibleItemsChanged() {
@@ -317,7 +371,24 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         widget.files[index],
         width: width,
         fit: fit,
+        frameBuilder: (context, child, frame, synchronouslyLoaded) {
+          if (index == _index && (synchronouslyLoaded || frame != null)) {
+            _notifyChapterOpened();
+          }
+          return child;
+        },
         errorBuilder: _imageError,
+      );
+    }
+
+    // 読み始める画像が表示されるまでは、
+    // 別ページの通常表示用リクエストを開始しない。
+    // 拡大表示は明示的な操作なので、この制限の対象外とする。
+    if (!fullResolution && !_initialNetworkImageReady && index != _index) {
+      return SizedBox(
+        width: width,
+        height: 240,
+        child: const ColoredBox(color: Colors.black),
       );
     }
 

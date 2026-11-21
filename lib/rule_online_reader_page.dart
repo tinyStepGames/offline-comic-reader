@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -9,6 +10,8 @@ import 'rendered_rule_page.dart';
 import 'services/html_probe.dart';
 import 'services/rule_browse_client.dart';
 import 'services/rule_content_client.dart';
+import 'services/chapter_image_url_cache.dart';
+import 'services/opened_chapter_store.dart';
 import 'services/rule_downloads.dart';
 import 'services/site_rule_store.dart';
 
@@ -34,7 +37,7 @@ class RuleOnlineReaderPage extends StatefulWidget {
 }
 
 class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
-  final _client = RuleContentClient();
+  final _client = RuleContentClient(imageUrlCache: ChapterImageUrlCache.shared);
 
   CancelToken? _cancel;
   late int _index;
@@ -107,6 +110,8 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
     final token = CancelToken();
     _cancel = token;
 
+    final openingClock = Stopwatch()..start();
+
     setState(() {
       _loading = true;
       _error = null;
@@ -129,6 +134,8 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
 
       if (!mounted || token.isCancelled) return;
 
+      final localCheckMs = openingClock.elapsedMilliseconds;
+
       // 保存済みならHTML取得も画像通信も行わない。
       final images = local.isNotEmpty
           ? const <Uri>[]
@@ -147,6 +154,17 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
         _files = local;
         _opened = true;
       });
+
+      assert(() {
+        debugPrint(
+          '[reader-open] '
+          'local_check=${localCheckMs}ms '
+          'urls_ready=${openingClock.elapsedMilliseconds}ms '
+          'source=${local.isNotEmpty ? 'offline' : 'network'} '
+          'pages=${local.isNotEmpty ? local.length : images.length}',
+        );
+        return true;
+      }());
     } catch (error) {
       if (!mounted || token.isCancelled) return;
 
@@ -171,6 +189,21 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
     } finally {
       if (identical(_cancel, token)) _cancel = null;
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _rememberChapterOpened(String chapterUrl) async {
+    try {
+      await OpenedChapterStore.shared.mark(
+        siteId: widget.site.id,
+        chapterUrl: chapterUrl,
+      );
+    } catch (error) {
+      // 記録失敗で読書を中断しない。
+      assert(() {
+        debugPrint('[opened-chapter] save_failed=$error');
+        return true;
+      }());
     }
   }
 
@@ -251,6 +284,9 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
             files: _files,
             imageUrls: _images,
             title: chapter.title,
+            onOpened: () {
+              unawaited(_rememberChapterOpened(chapterUrl));
+            },
             progressKey: ReadingKey(
               // 既存の組み込みサイトの識別子とは分離する。
               sourceId: 'custom-site:${widget.site.id}',

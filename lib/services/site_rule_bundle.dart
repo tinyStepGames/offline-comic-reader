@@ -29,10 +29,14 @@ class SiteRuleBundle {
 
   Map<String, dynamic> toJson() => {
     'format': format,
-    'version': site.searchSettings != null
-        ? 3
-        : (site.tagNavigation == null ? 1 : 2),
+    'version': site.browseTabs.isNotEmpty
+        ? 4
+        : (site.searchSettings != null
+              ? 3
+              : (site.tagNavigation == null ? 1 : 2)),
     'name': site.name,
+    if (site.browseTabs.isNotEmpty)
+      'browseTabs': site.browseTabs.map((tab) => tab.toJson()).toList(),
     if (site.searchSettings != null)
       'searchSettings': site.searchSettings!.toJson(),
     'rules': site.rules.map((key, value) => MapEntry(key, value.toJson())),
@@ -110,7 +114,7 @@ class SiteRuleBundle {
       final data = Map<String, dynamic>.from(value);
 
       if (data['format'] != format ||
-          !const [1, 2, 3].contains(data['version']) ||
+          !const [1, 2, 3, 4].contains(data['version']) ||
           data.keys.any(
             (key) => !const {
               'format',
@@ -120,18 +124,24 @@ class SiteRuleBundle {
               'images',
               'tagNavigation',
               'searchSettings',
+              'browseTabs',
             }.contains(key),
           )) {
         throw const FormatException('未対応のサイト一式形式です');
       }
 
       if (data.containsKey('tagNavigation') &&
-          !const [2, 3].contains(data['version'])) {
+          !const [2, 3, 4].contains(data['version'])) {
         throw const FormatException('タグ先設定を含む共有JSONにはバージョン2が必要です');
       }
 
-      if (data.containsKey('searchSettings') && data['version'] != 3) {
+      if (data.containsKey('searchSettings') &&
+          !const [3, 4].contains(data['version'])) {
         throw const FormatException('検索設定を含む共有JSONにはバージョン3が必要です');
+      }
+
+      if (data.containsKey('browseTabs') && data['version'] != 4) {
+        throw const FormatException('タブ設定を含む共有JSONにはバージョン4が必要です');
       }
 
       // 共有元のIDと保存日時は移植しない。
@@ -141,6 +151,7 @@ class SiteRuleBundle {
         'name': data['name'],
         'updatedAt': '2000-01-01T00:00:00.000Z',
         'rules': data['rules'],
+        if (data.containsKey('browseTabs')) 'browseTabs': data['browseTabs'],
         if (data.containsKey('searchSettings'))
           'searchSettings': data['searchSettings'],
         if (data.containsKey('images')) 'images': data['images'],
@@ -214,6 +225,7 @@ Future<RuleBrowseResult> checkSiteBundleStatic(
     images: site.images,
     tagNavigation: site.tagNavigation,
     searchSettings: site.searchSettings,
+    browseTabs: site.browseTabs,
   );
 
   final client = RuleBrowseClient(fetcher: fetcher);

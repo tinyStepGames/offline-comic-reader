@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
+import 'chapter_image_url_cache.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import 'chapter_image_probe.dart';
 import 'html_probe.dart';
@@ -6,7 +10,15 @@ import 'rule_browse_client.dart';
 import 'site_rule_store.dart';
 
 class RuleContentClient {
-  RuleContentClient({RulePageFetcher? fetcher}) : _fetcher = fetcher;
+  RuleContentClient({
+    RulePageFetcher? fetcher,
+    ChapterImageUrlCache? imageUrlCache,
+  }) : _fetcher = fetcher,
+       _imageUrlCache = imageUrlCache;
+
+  // 未指定ならキャッシュを使用しない。
+  // 異なる取得処理の結果を、暗黙に共有しないため。
+  final ChapterImageUrlCache? _imageUrlCache;
 
   final HtmlProbeClient _client = HtmlProbeClient();
   final RulePageFetcher? _fetcher;
@@ -40,6 +52,27 @@ class RuleContentClient {
       throw const FormatException('チャプターURLの取得元がサイト設定と異なります');
     }
 
+    final cacheKey = jsonEncode([
+      site.id,
+      site.updatedAt.toUtc().toIso8601String(),
+      target.toString(),
+      settings.toJson(),
+    ]);
+
+    final cached = _imageUrlCache?.get(cacheKey);
+
+    if (cached != null) {
+      _checkCancel(cancelToken);
+
+      assert(() {
+        debugPrint('[reader-content] cache_hit images=${cached.length}');
+        return true;
+      }());
+
+      return cached;
+    }
+
+    final fetchClock = Stopwatch()..start();
     final HtmlProbePage page;
 
     if (settings.acquisition == 'renderedDom') {
@@ -68,13 +101,29 @@ class RuleContentClient {
             );
     }
 
+    final fetchMs = fetchClock.elapsedMilliseconds;
+
     _checkCancel(cancelToken);
 
     if (htmlProbeUri(page.uri.toString()).origin != origin) {
       throw const FormatException('転送後の本文ページが別の取得元です');
     }
 
+    final extractionClock = Stopwatch()..start();
+
     final report = await probeChapterImages(page: page, rule: settings.rule);
+
+    assert(() {
+      debugPrint(
+        '[reader-content] '
+        'method=${settings.acquisition} '
+        'html=${fetchMs}ms '
+        'extract=${extractionClock.elapsedMilliseconds}ms '
+        'images=${report.images.length} '
+        'usable=${report.isUsable}',
+      );
+      return true;
+    }());
 
     _checkCancel(cancelToken);
 
@@ -87,7 +136,10 @@ class RuleContentClient {
       );
     }
 
-    return List<Uri>.unmodifiable(report.images);
+    final images = List<Uri>.unmodifiable(report.images);
+    _imageUrlCache?.put(cacheKey, images);
+
+    return images;
   }
 
   void close() => _client.close();

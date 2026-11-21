@@ -1,11 +1,16 @@
+import 'site_browse_tabs_view.dart';
 import 'site_search_page.dart';
 import 'services/work_tag_link.dart';
 import 'services/tag_browse_plan.dart';
+import 'dart:async';
+
 import 'package:dio/dio.dart';
+import 'services/opened_chapter_store.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'rendered_rule_page.dart';
+import 'services/headless_download_page.dart';
+import 'services/browse_snapshot_cache.dart';
 import 'services/html_probe.dart';
 import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
@@ -32,10 +37,12 @@ class RuleBrowsePage extends StatefulWidget {
     this.listTitle,
     this.pagingNotice,
     this.navigationSite,
+    this.tabsHeader,
   });
 
   final SavedSiteRule site;
   final SavedSiteRule? navigationSite;
+  final PreferredSizeWidget? tabsHeader;
   final String kind;
   final String? targetUrl;
   final String? workTitle;
@@ -49,6 +56,83 @@ class RuleBrowsePage extends StatefulWidget {
 
 class _RuleBrowsePageState extends State<RuleBrowsePage> {
   final _client = RuleBrowseClient();
+
+  DateTime? _fetchedAt;
+
+  String get _snapshotKey => browseSnapshotKey(
+    site: widget.site,
+    kind: widget.kind,
+    targetUrl: widget.targetUrl,
+  );
+
+  void _rememberSnapshot({bool allowBusy = false}) {
+    final result = _result;
+    final fetchedAt = _fetchedAt;
+
+    if (_showSiteTabs ||
+        result == null ||
+        fetchedAt == null ||
+        (_busy && !allowBusy)) {
+      return;
+    }
+
+    BrowseSnapshotCache.shared.put(
+      _snapshotKey,
+      BrowseSnapshot(
+        result: result,
+        fetchedAt: fetchedAt,
+        lastPage: _lastPage,
+        pagesLoaded: _pagesLoaded,
+        hasMore: _hasMore,
+        pagingEnd: _pagingEnd,
+        scrollOffset: _scrollController.hasClients
+            ? _scrollController.offset
+            : 0,
+        collection: _collection,
+      ),
+    );
+  }
+
+  void _restoreSnapshotOffset(BrowseSnapshot snapshot) {
+    if (snapshot.collection != _collection ||
+        !snapshot.scrollOffset.isFinite ||
+        snapshot.scrollOffset < 0) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+
+      final position = _scrollController.position;
+      final offset = snapshot.scrollOffset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+
+      _scrollController.jumpTo(offset);
+    });
+  }
+
+  Set<String> _openedChapterUrls = <String>{};
+
+  Future<void> _restoreOpenedChapters() async {
+    if (!mounted || _isWorks) return;
+
+    try {
+      final urls = await OpenedChapterStore.shared.read(siteId: widget.site.id);
+
+      if (!mounted) return;
+
+      setState(() {
+        _openedChapterUrls = urls;
+      });
+    } catch (error) {
+      assert(() {
+        debugPrint('[opened-chapter] load_failed=$error');
+        return true;
+      }());
+    }
+  }
+
   CancelToken? _cancel;
   RuleBrowseResult? _result;
   bool _busy = true;
@@ -166,6 +250,8 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           _pagingEnd = '今回の閲覧での取得上限に達しました。';
         }
       });
+
+      _rememberSnapshot();
     } catch (error) {
       if (!mounted || generation != _generation || cancel.isCancelled) {
         return;
@@ -358,6 +444,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         MaterialPageRoute<void>(
           builder: (_) => RuleBrowsePage(
             site: plan.site,
+            navigationSite: widget.navigationSite ?? widget.site,
             listTitle: tag.label,
             pagingNotice: plan.notice,
           ),
@@ -390,17 +477,26 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     }
   }
 
+  bool get _showSiteTabs =>
+      widget.kind == 'works' &&
+      widget.navigationSite == null &&
+      widget.targetUrl == null &&
+      widget.listTitle == null &&
+      widget.tabsHeader == null &&
+      widget.site.browseTabs.isNotEmpty;
+
   bool get _isWorks => widget.kind == 'works';
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    unawaited(_restoreOpenedChapters());
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || _showSiteTabs) return;
       if (ModalRoute.of(context)?.isCurrent != true) return;
-      _load();
+      _load(useCache: true);
     });
   }
 
@@ -414,44 +510,77 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
       throw StateError('取得を中止しました');
     }
 
-    // 呼び出し元の描画処理が終わってから取得画面を開く。
-    await WidgetsBinding.instance.endOfFrame;
+    final clock = Stopwatch()..start();
 
-    if (!mounted || cancelToken.isCancelled) {
-      throw StateError('取得を中止しました');
-    }
-    if (ModalRoute.of(context)?.isCurrent != true) {
-      throw StateError('一覧画面を離れたため取得を中止しました');
-    }
+    try {
+      final page = await fetchRenderedDownloadPage(
+        input,
+        cancelToken: cancelToken,
+        allowedOrigin: allowedOrigin,
+        groupSelector: groupSelector,
+        fastForLists: _isWorks,
+      );
 
-    final page = await Navigator.of(context).push<HtmlProbePage>(
-      MaterialPageRoute<HtmlProbePage>(
-        builder: (_) => RenderedRulePage(
-          backgroundMode: true,
-          previewTitle: widget.workTitle ?? widget.site.name,
-          previewThumbnail: widget.workThumbnail,
-          url: input,
-          allowedOrigin: allowedOrigin,
-          groupSelector: groupSelector,
-          cancelToken: cancelToken,
-        ),
-      ),
-    );
+      if (!mounted || cancelToken.isCancelled) {
+        throw StateError('取得を中止しました');
+      }
 
-    if (page == null || cancelToken.isCancelled) {
-      throw StateError('表示後HTMLの取得を中止しました');
+      return page;
+    } finally {
+      assert(() {
+        debugPrint('[browse] rendered_fetch=${clock.elapsedMilliseconds}ms');
+        return true;
+      }());
     }
-    return page;
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool useCache = false}) async {
+    final totalClock = Stopwatch()..start();
+
     await _restoreLayout();
     if (!mounted) return;
+
+    // 正常表示できている一覧を、再取得前に退避する。
+    _rememberSnapshot();
 
     final generation = ++_generation;
     _cancel?.cancel('再取得');
     final cancel = CancelToken();
     _cancel = cancel;
+
+    if (useCache) {
+      final snapshot = BrowseSnapshotCache.shared.get(_snapshotKey);
+
+      if (snapshot != null) {
+        setState(() {
+          _result = snapshot.result;
+          _fetchedAt = snapshot.fetchedAt;
+          _lastPage = snapshot.lastPage;
+          _pagesLoaded = snapshot.pagesLoaded;
+          _hasMore = snapshot.hasMore;
+          _pagingEnd = snapshot.pagingEnd;
+          _moreError = '';
+          _moreBusy = false;
+          _busy = false;
+          _status = '${snapshot.result.items.length}件を取得しました';
+        });
+
+        _restoreSnapshotOffset(snapshot);
+
+        assert(() {
+          debugPrint(
+            '[browse] cache_hit total=${totalClock.elapsedMilliseconds}ms '
+            'items=${snapshot.result.items.length}',
+          );
+          return true;
+        }());
+
+        return;
+      }
+    } else {
+      // 更新ボタンはキャッシュを使わない。
+      BrowseSnapshotCache.shared.remove(_snapshotKey);
+    }
 
     setState(() {
       _busy = true;
@@ -460,7 +589,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
       _moreError = '';
       _pagingEnd = '';
       _pagesLoaded = 0;
-      _result = null;
+      // 再取得中も表示済みの一覧は残す。
       _status = '${_isWorks ? '作品' : 'チャプター'}一覧を取得中';
     });
 
@@ -504,6 +633,17 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             ? '一覧が見つかりませんでした。URLとまとまりの設定を確認してください。'
             : '${items.length}件を取得しました';
       });
+
+      _fetchedAt = DateTime.now();
+      _rememberSnapshot(allowBusy: true);
+
+      assert(() {
+        debugPrint(
+          '[browse] network_total=${totalClock.elapsedMilliseconds}ms '
+          'kind=${widget.kind} items=${items.length}',
+        );
+        return true;
+      }());
     } catch (error) {
       if (!mounted || generation != _generation || cancel.isCancelled) {
         return;
@@ -517,7 +657,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   Future<void> _open(RuleBrowseItem item) async {
-    if (_busy || _openingItem) return;
+    if (_openingItem) return;
 
     final url = item.url;
     if (url == null) {
@@ -630,6 +770,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         ).showSnackBar(SnackBar(content: Text('画面を開けませんでした：$error')));
       }
     } finally {
+      await _restoreOpenedChapters();
       _openingItem = false;
     }
   }
@@ -656,6 +797,44 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
     ),
   );
 
+  Widget _chapterAwareTitle(RuleBrowseItem item) {
+    final url = item.url;
+
+    final opened =
+        !_isWorks &&
+        url != null &&
+        _openedChapterUrls.contains(url.removeFragment().toString());
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            item.title,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: opened ? Colors.white54 : null,
+            ),
+          ),
+        ),
+        if (opened) ...[
+          const SizedBox(width: 8),
+          const Tooltip(
+            message: '本文を開いたことがあります',
+            child: Icon(
+              Icons.check_circle_outline,
+              size: 18,
+              color: Colors.white54,
+              semanticLabel: '開いたチャプター',
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _item(RuleBrowseItem item) => Card(
     margin: const EdgeInsets.only(bottom: 10),
     clipBehavior: Clip.antiAlias,
@@ -672,12 +851,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    item.title,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  _chapterAwareTitle(item),
                   if (item.latestChapter.isNotEmpty) ...[
                     const SizedBox(height: 6),
                     Text(item.latestChapter),
@@ -760,6 +934,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
 
   @override
   void dispose() {
+    _rememberSnapshot();
     _generation++;
     _cancel?.cancel('画面終了');
     _scrollController.dispose();
@@ -768,84 +943,90 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.black,
-    appBar: AppBar(
-      title: Text(
-        _isWorks
-            ? widget.listTitle ?? widget.site.name
-            : widget.workTitle ?? 'チャプター一覧',
-      ),
-      actions: [
-        if (_isWorks &&
-            (widget.navigationSite ?? widget.site).searchSettings != null)
-          IconButton(
-            tooltip: 'このサイトを検索',
-            onPressed: _busy || _openingItem ? null : _openSearch,
-            icon: const Icon(Icons.search),
-          ),
-        IconButton(
-          tooltip: '保存済みを開く',
-          onPressed: () {
-            Navigator.of(context).push<void>(
-              MaterialPageRoute<void>(
-                builder: (_) => RuleSavedDownloadsPage(site: widget.site),
-              ),
-            );
-          },
-          icon: const Icon(Icons.folder_outlined),
-        ),
-        if (_isWorks)
-          IconButton(
-            tooltip: _collection ? 'Table表示に切り替え' : 'Collection表示に切り替え',
-            onPressed: _layoutReady ? _toggleLayout : null,
-            icon: Icon(
-              _collection ? Icons.view_list_outlined : Icons.grid_view_outlined,
+  Widget build(BuildContext context) => _showSiteTabs
+      ? SiteBrowseTabsView(site: widget.site)
+      : Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            bottom: widget.tabsHeader,
+            title: Text(
+              _isWorks
+                  ? widget.listTitle ?? widget.site.name
+                  : widget.workTitle ?? 'チャプター一覧',
             ),
-          ),
-        IconButton(
-          tooltip: '再読み込み',
-          onPressed: _busy ? null : _load,
-          icon: const Icon(Icons.refresh),
-        ),
-      ],
-    ),
-    body: SafeArea(
-      child: CustomScrollView(
-        controller: _scrollController,
-        key: PageStorageKey<String>(
-          '${widget.site.id}:${widget.kind}:'
-          '${widget.targetUrl ?? ''}:'
-          '${_isWorks && _collection ? 'collection' : 'table'}',
-        ),
-        slivers: [
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            sliver: SliverToBoxAdapter(child: _header()),
-          ),
-          if (!_isWorks && !_busy && _result != null)
-            SliverToBoxAdapter(child: _workSection()),
-          if (_isWorks && _collection)
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-              sliver: RuleCollectionSliver(
-                items: _result?.items ?? const <RuleBrowseItem>[],
-                onOpen: _open,
-              ),
-            )
-          else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (_, index) => _item(_visibleItems[index]),
-                  childCount: _result?.items.length ?? 0,
+            actions: [
+              if (_isWorks &&
+                  (widget.navigationSite ?? widget.site).searchSettings != null)
+                IconButton(
+                  tooltip: 'このサイトを検索',
+                  onPressed: _busy || _openingItem ? null : _openSearch,
+                  icon: const Icon(Icons.search),
                 ),
+              IconButton(
+                tooltip: '保存済みを開く',
+                onPressed: () {
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => RuleSavedDownloadsPage(site: widget.site),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.folder_outlined),
               ),
+              if (_isWorks)
+                IconButton(
+                  tooltip: _collection ? 'Table表示に切り替え' : 'Collection表示に切り替え',
+                  onPressed: _layoutReady ? _toggleLayout : null,
+                  icon: Icon(
+                    _collection
+                        ? Icons.view_list_outlined
+                        : Icons.grid_view_outlined,
+                  ),
+                ),
+              IconButton(
+                tooltip: '再読み込み',
+                onPressed: _busy ? null : _load,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          body: SafeArea(
+            child: CustomScrollView(
+              controller: _scrollController,
+              key: PageStorageKey<String>(
+                '${widget.site.id}:${widget.kind}:'
+                '${widget.site.rules['works']?.pageUrl ?? ''}:'
+                '${widget.targetUrl ?? ''}:'
+                '${_isWorks && _collection ? 'collection' : 'table'}',
+              ),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  sliver: SliverToBoxAdapter(child: _header()),
+                ),
+                if (!_isWorks && _result != null)
+                  SliverToBoxAdapter(child: _workSection()),
+                if (_isWorks && _collection)
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+                    sliver: RuleCollectionSliver(
+                      items: _result?.items ?? const <RuleBrowseItem>[],
+                      onOpen: _open,
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    sliver: SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (_, index) => _item(_visibleItems[index]),
+                        childCount: _result?.items.length ?? 0,
+                      ),
+                    ),
+                  ),
+                SliverToBoxAdapter(child: _pagingFooter()),
+              ],
             ),
-          SliverToBoxAdapter(child: _pagingFooter()),
-        ],
-      ),
-    ),
-  );
+          ),
+        );
 }

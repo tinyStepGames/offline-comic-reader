@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'html_probe.dart';
+import 'rendered_list_readiness.dart';
 import 'rendered_rule_capture.dart';
 
 /// ダウンロード専用。Navigatorや画面のBuildContextを使用しない。
@@ -17,6 +18,7 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
   required CancelToken cancelToken,
   required String allowedOrigin,
   required String groupSelector,
+  bool fastForLists = false,
 }) async {
   if (cancelToken.isCancelled) {
     throw StateError('保存を中断しました');
@@ -78,6 +80,12 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
 
   HeadlessInAppWebView? webView;
 
+  final totalClock = Stopwatch()..start();
+  int? environmentMs;
+  int? controllerMs;
+  int? firstMatchMs;
+  int? captureMs;
+
   try {
     WebViewEnvironment? environment;
 
@@ -85,6 +93,8 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
       // Windows用の環境はアプリ起動中に再利用する。
       environment = await guarded(_DownloadWebViewEnvironment.get());
     }
+
+    environmentMs = totalClock.elapsedMilliseconds;
 
     final created = Completer<InAppWebViewController>();
     var navigationGeneration = 0;
@@ -149,14 +159,56 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
     await guarded(webView.run());
     final controller = await guarded(created.future);
 
+    controllerMs = totalClock.elapsedMilliseconds - environmentMs;
+
     final selector = jsonEncode(groupSelector);
     final clock = Stopwatch()..start();
+    final listReadiness = RenderedListReadiness();
+    var previousNavigationGeneration = navigationGeneration;
     String? previousSignature;
     Duration? stableSince;
+
+    // 一覧内の属性・テキストの変更を検出する。
+    // HTMLサイズが同じまま内容が変わった場合も判定対象にする。
+    // 一覧のHTMLそのものは毎回Dartへ送らない。
+    const listFingerprintScript = r'''
+function ocrListFingerprint(nodes) {
+  let hash1 = 2166136261;
+  let hash2 = 5381;
+  let length = 0;
+
+  function feed(text) {
+    length += text.length;
+
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      hash1 = Math.imul(hash1 ^ code, 16777619);
+      hash2 = Math.imul(hash2, 33) ^ code;
+    }
+  }
+
+  for (let i = 0; i < nodes.length; i++) {
+    feed(String(i));
+    feed(':');
+    feed(nodes[i].outerHTML);
+    feed('\n');
+  }
+
+  return nodes.length + ':' + length + ':' +
+    (hash1 >>> 0) + ':' + (hash2 >>> 0);
+}
+''';
 
     while (true) {
       if (cancelToken.isCancelled) {
         throw StateError('保存を中断しました');
+      }
+
+      if (previousNavigationGeneration != navigationGeneration) {
+        previousNavigationGeneration = navigationGeneration;
+        previousSignature = null;
+        stableSince = null;
+        listReadiness.reset(clock.elapsed);
       }
 
       final generation = navigationGeneration;
@@ -167,8 +219,16 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
               '''
 (() => {
   const root = document.documentElement;
-  const count = document.querySelectorAll($selector).length;
-  const size = root ? root.outerHTML.length : 0;
+  const nodes = document.querySelectorAll($selector);
+  const count = nodes.length;
+  const fast = $fastForLists;
+
+  $listFingerprintScript
+
+  // 通常モードは従来どおりページ全体のサイズを監視する。
+  // 高速一覧モードでは対象一覧の内容を監視する。
+  // 最終HTMLのサイズ制限は、取得時に別途確認する。
+  const size = !fast && root ? root.outerHTML.length : 0;
 
   if (size > 2097152) {
     throw new Error('表示後HTMLが大きすぎます');
@@ -178,7 +238,8 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
     url: location.href,
     ready: document.readyState,
     count,
-    size
+    size,
+    fingerprint: fast ? ocrListFingerprint(nodes) : ''
   });
 })()
 ''',
@@ -197,10 +258,25 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
         }
 
         final count = data['count'] as int;
-        final signature = '${data['url']}|$count|${data['size']}';
+        final signature = fastForLists
+            ? '${data['url']}|${data['fingerprint']}'
+            : '${data['url']}|$count|${data['size']}';
         final now = clock.elapsed;
 
-        if (data['ready'] != 'complete' || count == 0) {
+        if (count > 0) {
+          firstMatchMs ??= totalClock.elapsedMilliseconds;
+        }
+
+        var shouldCapture = false;
+
+        if (fastForLists) {
+          shouldCapture = listReadiness.observe(
+            now: now,
+            ready: data['ready'] as String,
+            count: count,
+            signature: signature,
+          );
+        } else if (data['ready'] != 'complete' || count == 0) {
           previousSignature = null;
           stableSince = null;
         } else if (previousSignature != signature) {
@@ -208,6 +284,11 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
           stableSince = now;
         } else if (stableSince != null &&
             now - stableSince >= const Duration(seconds: 2)) {
+          shouldCapture = true;
+        }
+
+        if (shouldCapture) {
+          final captureClock = Stopwatch()..start();
           final captured = await guarded(
             controller.evaluateJavascript(
               source:
@@ -223,7 +304,15 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
     throw new Error('表示後HTMLが大きすぎます');
   }
 
-  return JSON.stringify({url: location.href, source});
+  $listFingerprintScript
+
+  return JSON.stringify({
+    url: location.href,
+    source,
+    fingerprint: $fastForLists
+      ? ocrListFingerprint(document.querySelectorAll($selector))
+      : ''
+  });
 })()
 ''',
             ),
@@ -237,21 +326,44 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
               throw const FormatException('表示後HTMLを取得できませんでした');
             }
 
-            return decodeRenderedRulePage(
-              captured,
-              allowedOrigin: allowedOrigin,
-            );
+            var unchanged = true;
+
+            if (fastForLists) {
+              final capturedData = Map<String, dynamic>.from(
+                jsonDecode(captured) as Map,
+              );
+
+              unchanged =
+                  capturedData['url'] == data['url'] &&
+                  capturedData['fingerprint'] == data['fingerprint'];
+
+              if (!unchanged) {
+                listReadiness.reset(clock.elapsed);
+              }
+            }
+
+            if (unchanged) {
+              captureMs = captureClock.elapsedMilliseconds;
+
+              return decodeRenderedRulePage(
+                captured,
+                allowedOrigin: allowedOrigin,
+              );
+            }
           }
         }
       }
 
-      await guarded(Future<void>.delayed(const Duration(milliseconds: 500)));
+      await guarded(
+        Future<void>.delayed(Duration(milliseconds: fastForLists ? 200 : 500)),
+      );
     }
   } finally {
     finished = true;
     deadline.cancel();
 
     // 成功・失敗・中断のどの場合も、作成した非表示WebViewを破棄する。
+    final disposeClock = Stopwatch()..start();
     final targetWebView = webView;
     if (targetWebView != null) {
       try {
@@ -259,6 +371,21 @@ Future<HtmlProbePage> fetchRenderedDownloadPage(
       } catch (_) {
         // 破棄時のエラーで本来の取得結果を上書きしない。
       }
+    }
+
+    if (fastForLists) {
+      assert(() {
+        debugPrint(
+          '[rendered-list] '
+          'environment=${environmentMs ?? -1}ms '
+          'controller=${controllerMs ?? -1}ms '
+          'first_match=${firstMatchMs ?? -1}ms '
+          'capture=${captureMs ?? -1}ms '
+          'dispose=${disposeClock.elapsedMilliseconds}ms '
+          'total=${totalClock.elapsedMilliseconds}ms',
+        );
+        return true;
+      }());
     }
   }
 }

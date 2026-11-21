@@ -1,3 +1,4 @@
+import 'site_browse_tabs_editor_page.dart';
 import 'site_search_editor_page.dart';
 import 'site_search_page.dart';
 import 'tag_navigation_editor_page.dart';
@@ -121,6 +122,19 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           initialRule: rule,
           savedSite: site,
         ),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _editBrowseTabs(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            SiteBrowseTabsEditorPage(store: widget.store, site: site),
       ),
     );
 
@@ -358,6 +372,18 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
                   },
           ),
           _slot(site, 'works', '作品一覧'),
+          ListTile(
+            leading: const Icon(Icons.tab_outlined),
+            title: const Text('サイト内タブ'),
+            subtitle: Text(
+              site.browseTabs.isEmpty
+                  ? '未設定・最新や人気などのタブを追加'
+                  : '${site.browseTabs.length}個の追加タブ・タップして編集',
+            ),
+            onTap: _busy || !site.rules.containsKey('works')
+                ? null
+                : () => _editBrowseTabs(site),
+          ),
           ListTile(
             leading: Icon(
               site.searchSettings == null

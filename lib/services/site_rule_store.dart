@@ -1,3 +1,4 @@
+import 'site_browse_tab.dart';
 import 'site_search_settings.dart';
 import 'tag_navigation_settings.dart';
 import 'dart:convert';
@@ -18,6 +19,7 @@ class SavedSiteRule {
     this.images,
     this.tagNavigation,
     this.searchSettings,
+    this.browseTabs = const [],
   });
 
   final String id;
@@ -27,6 +29,7 @@ class SavedSiteRule {
   final ChapterImageSettings? images;
   final TagNavigationSettings? tagNavigation;
   final SiteSearchSettings? searchSettings;
+  final List<SiteBrowseTab> browseTabs;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -36,6 +39,8 @@ class SavedSiteRule {
     if (images != null) 'images': images!.toJson(),
     if (tagNavigation != null) 'tagNavigation': tagNavigation!.toJson(),
     if (searchSettings != null) 'searchSettings': searchSettings!.toJson(),
+    if (browseTabs.isNotEmpty)
+      'browseTabs': browseTabs.map((tab) => tab.toJson()).toList(),
   };
 
   factory SavedSiteRule.fromJson(Map<String, dynamic> data) {
@@ -48,6 +53,7 @@ class SavedSiteRule {
         'images',
         'tagNavigation',
         'searchSettings',
+        'browseTabs',
       }.contains(key),
     )) {
       throw const FormatException('未対応のサイト保存項目です');
@@ -92,6 +98,9 @@ class SavedSiteRule {
           );
     searchSettings?.validateFor(rules);
 
+    final browseTabs = SiteBrowseTab.parseList(data['browseTabs']);
+    SiteBrowseTab.validateList(browseTabs, rules);
+
     return SavedSiteRule(
       id: id,
       name: name,
@@ -100,6 +109,7 @@ class SavedSiteRule {
       images: images,
       tagNavigation: tagNavigation,
       searchSettings: searchSettings,
+      browseTabs: browseTabs,
     );
   }
 }
@@ -180,6 +190,7 @@ class SiteRuleStore {
     }
 
     for (final site in sites) {
+      SiteBrowseTab.validateList(site.browseTabs, site.rules);
       site.searchSettings?.validateFor(site.rules);
       site.images?.validateOrigins(
         site.rules.values.map((rule) => rule.pageUrl),
@@ -249,6 +260,7 @@ class SiteRuleStore {
       images: index >= 0 ? sites[index].images : null,
       tagNavigation: index >= 0 ? sites[index].tagNavigation : null,
       searchSettings: index >= 0 ? sites[index].searchSettings : null,
+      browseTabs: index >= 0 ? sites[index].browseTabs : const [],
       name: checkedName,
       rules: Map.unmodifiable(rules),
       updatedAt: DateTime.now().toUtc(),
@@ -282,6 +294,7 @@ class SiteRuleStore {
       images: checked,
       tagNavigation: old.tagNavigation,
       searchSettings: old.searchSettings,
+      browseTabs: old.browseTabs,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -303,6 +316,7 @@ class SiteRuleStore {
       images: old.images,
       tagNavigation: old.tagNavigation,
       searchSettings: old.searchSettings,
+      browseTabs: old.browseTabs,
       updatedAt: DateTime.now().toUtc(),
     );
     await _write(sites);
@@ -392,6 +406,7 @@ class SiteRuleStore {
       images: old.images,
       tagNavigation: checked,
       searchSettings: old.searchSettings,
+      browseTabs: old.browseTabs,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -426,6 +441,42 @@ class SiteRuleStore {
     } else {
       data['searchSettings'] = checked.toJson();
     }
+    data['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+
+    final saved = SavedSiteRule.fromJson(data);
+    sites[index] = saved;
+
+    await _write(sites);
+    return saved;
+  });
+
+  Future<SavedSiteRule> saveBrowseTabs({
+    required String id,
+    required List<SiteBrowseTab> tabs,
+    required DateTime expectedUpdatedAt,
+  }) => _locked(() async {
+    final sites = await _read();
+    final index = _requiredIndex(sites, id);
+    final old = sites[index];
+
+    if (old.updatedAt != expectedUpdatedAt.toUtc()) {
+      throw StateError('編集中にサイト設定が変更されました。画面を開き直してください');
+    }
+
+    final checked = tabs
+        .map((tab) => SiteBrowseTab.fromJson(tab.toJson()))
+        .toList(growable: false);
+
+    SiteBrowseTab.validateList(checked, old.rules);
+
+    final data = old.toJson();
+
+    if (checked.isEmpty) {
+      data.remove('browseTabs');
+    } else {
+      data['browseTabs'] = checked.map((tab) => tab.toJson()).toList();
+    }
+
     data['updatedAt'] = DateTime.now().toUtc().toIso8601String();
 
     final saved = SavedSiteRule.fromJson(data);
