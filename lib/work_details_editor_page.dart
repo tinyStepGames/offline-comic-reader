@@ -201,7 +201,7 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage> {
               helperText: number
                   ? '例：a.chapter-title。まとまり自身は :scope'
                   : key == 'tags'
-                  ? '1タグずつに一致させます。例：.genres a'
+                  ? '1タグずつのa要素を推奨。文字列で名前を取得し、hrefは自動取得します。例：.genres a'
                   : '例：h1[lang="ja"] / .description / img.cover',
               helperMaxLines: 3,
               border: const OutlineInputBorder(),
@@ -342,6 +342,14 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage> {
                 SelectableText('説明：\n${preview.description}'),
                 const SizedBox(height: 8),
                 SelectableText('タグ：${preview.tags.join(' ／ ')}'),
+                for (final link in preview.tagLinks)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: SelectableText(
+                      '${link.label} → ${link.url}',
+                      style: const TextStyle(color: Colors.lightBlueAccent),
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 SelectableText(
                   '並び替え用話数（先頭30件）：\n'

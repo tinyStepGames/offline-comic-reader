@@ -1,3 +1,4 @@
+import 'tag_navigation_settings.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -14,6 +15,7 @@ class SavedSiteRule {
     required this.rules,
     required this.updatedAt,
     this.images,
+    this.tagNavigation,
   });
 
   final String id;
@@ -21,6 +23,7 @@ class SavedSiteRule {
   final Map<String, ListExtractionRule> rules;
   final DateTime updatedAt;
   final ChapterImageSettings? images;
+  final TagNavigationSettings? tagNavigation;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -28,12 +31,19 @@ class SavedSiteRule {
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'rules': rules.map((key, rule) => MapEntry(key, rule.toJson())),
     if (images != null) 'images': images!.toJson(),
+    if (tagNavigation != null) 'tagNavigation': tagNavigation!.toJson(),
   };
 
   factory SavedSiteRule.fromJson(Map<String, dynamic> data) {
     if (data.keys.any(
-      (key) =>
-          !const {'id', 'name', 'updatedAt', 'rules', 'images'}.contains(key),
+      (key) => !const {
+        'id',
+        'name',
+        'updatedAt',
+        'rules',
+        'images',
+        'tagNavigation',
+      }.contains(key),
     )) {
       throw const FormatException('未対応のサイト保存項目です');
     }
@@ -63,12 +73,20 @@ class SavedSiteRule {
         : ChapterImageSettings.parse(jsonEncode(data['images']));
     images?.validateOrigins(rules.values.map((rule) => rule.pageUrl));
 
+    final tagNavigation = data['tagNavigation'] == null
+        ? null
+        : TagNavigationSettings.fromJson(
+            Map<String, dynamic>.from(data['tagNavigation'] as Map),
+          );
+    tagNavigation?.validateFor(rules.values);
+
     return SavedSiteRule(
       id: id,
       name: name,
       rules: Map.unmodifiable(rules),
       updatedAt: updatedAt.toUtc(),
       images: images,
+      tagNavigation: tagNavigation,
     );
   }
 }
@@ -215,6 +233,7 @@ class SiteRuleStore {
     final saved = SavedSiteRule(
       id: id ?? _newId(sites),
       images: index >= 0 ? sites[index].images : null,
+      tagNavigation: index >= 0 ? sites[index].tagNavigation : null,
       name: checkedName,
       rules: Map.unmodifiable(rules),
       updatedAt: DateTime.now().toUtc(),
@@ -246,6 +265,7 @@ class SiteRuleStore {
       name: old.name,
       rules: old.rules,
       images: checked,
+      tagNavigation: old.tagNavigation,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -265,6 +285,7 @@ class SiteRuleStore {
       name: checkedName,
       rules: old.rules,
       images: old.images,
+      tagNavigation: old.tagNavigation,
       updatedAt: DateTime.now().toUtc(),
     );
     await _write(sites);
@@ -322,6 +343,45 @@ class SiteRuleStore {
     await _write(sites);
     return saved;
   });
+
+  /// 通常一覧・チャプター・本文画像を保持してタグ先設定だけを保存する。
+  /// settings が null の場合は専用設定を削除する。
+  Future<SavedSiteRule> saveTagNavigation({
+    required String id,
+    required TagNavigationSettings? settings,
+    required DateTime expectedUpdatedAt,
+  }) => _locked(() async {
+    final sites = await _read();
+    final index = _requiredIndex(sites, id);
+    final old = sites[index];
+
+    if (old.updatedAt != expectedUpdatedAt.toUtc()) {
+      throw StateError(
+        '編集中にサイト設定が変更されました。'
+        '画面を開き直してください',
+      );
+    }
+
+    final checked = settings == null
+        ? null
+        : TagNavigationSettings.fromJson(settings.toJson());
+
+    checked?.validateFor(old.rules.values);
+
+    final saved = SavedSiteRule(
+      id: old.id,
+      name: old.name,
+      rules: old.rules,
+      images: old.images,
+      tagNavigation: checked,
+      updatedAt: DateTime.now().toUtc(),
+    );
+
+    sites[index] = saved;
+    await _write(sites);
+    return saved;
+  });
+
   Future<void> delete(String id) => _locked(() async {
     final sites = await _read();
     final index = _requiredIndex(sites, id);

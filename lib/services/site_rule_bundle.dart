@@ -29,10 +29,12 @@ class SiteRuleBundle {
 
   Map<String, dynamic> toJson() => {
     'format': format,
-    'version': 1,
+    'version': site.tagNavigation == null ? 1 : 2,
     'name': site.name,
     'rules': site.rules.map((key, value) => MapEntry(key, value.toJson())),
     if (site.images != null) 'images': site.images!.toJson(),
+    if (site.tagNavigation != null)
+      'tagNavigation': site.tagNavigation!.toJson(),
   };
 
   String encodeJson() {
@@ -104,7 +106,7 @@ class SiteRuleBundle {
       final data = Map<String, dynamic>.from(value);
 
       if (data['format'] != format ||
-          data['version'] != 1 ||
+          !const [1, 2].contains(data['version']) ||
           data.keys.any(
             (key) => !const {
               'format',
@@ -112,9 +114,14 @@ class SiteRuleBundle {
               'name',
               'rules',
               'images',
+              'tagNavigation',
             }.contains(key),
           )) {
         throw const FormatException('未対応のサイト一式形式です');
+      }
+
+      if (data.containsKey('tagNavigation') && data['version'] != 2) {
+        throw const FormatException('タグ先設定を含む共有JSONにはバージョン2が必要です');
       }
 
       // 共有元のIDと保存日時は移植しない。
@@ -125,6 +132,8 @@ class SiteRuleBundle {
         'updatedAt': '2000-01-01T00:00:00.000Z',
         'rules': data['rules'],
         if (data.containsKey('images')) 'images': data['images'],
+        if (data.containsKey('tagNavigation'))
+          'tagNavigation': data['tagNavigation'],
       });
 
       return SiteRuleBundle._(checked);
@@ -191,6 +200,7 @@ Future<RuleBrowseResult> checkSiteBundleStatic(
     updatedAt: site.updatedAt,
     rules: {...site.rules, kind: staticRule},
     images: site.images,
+    tagNavigation: site.tagNavigation,
   );
 
   final client = RuleBrowseClient(fetcher: fetcher);

@@ -1,3 +1,4 @@
+import 'services/work_tag_link.dart';
 import 'package:flutter/material.dart';
 
 import 'services/work_page_details.dart';
@@ -8,11 +9,13 @@ class WorkDetailsPanel extends StatefulWidget {
     required this.details,
     this.fallbackTitle = '',
     this.fallbackThumbnail,
+    this.onTagTap,
   });
 
   final WorkPageDetails details;
   final String fallbackTitle;
   final Uri? fallbackThumbnail;
+  final ValueChanged<WorkTagLink>? onTagTap;
 
   @override
   State<WorkDetailsPanel> createState() => _WorkDetailsPanelState();
@@ -27,6 +30,30 @@ class _WorkDetailsPanelState extends State<WorkDetailsPanel> {
     if (oldWidget.details.description != widget.details.description) {
       _expanded = false;
     }
+  }
+
+  Widget _tagChip(String label) {
+    WorkTagLink? link;
+
+    for (final candidate in widget.details.tagLinks) {
+      if (candidate.label == label) {
+        link = candidate;
+        break;
+      }
+    }
+
+    final selected = link;
+    final callback = widget.onTagTap;
+
+    if (selected != null && callback != null) {
+      return ActionChip(
+        label: Text(label),
+        visualDensity: VisualDensity.compact,
+        onPressed: () => callback(selected),
+      );
+    }
+
+    return Chip(label: Text(label), visualDensity: VisualDensity.compact);
   }
 
   @override
@@ -67,10 +94,7 @@ class _WorkDetailsPanelState extends State<WorkDetailsPanel> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: [
-              for (final tag in details.tags)
-                Chip(label: Text(tag), visualDensity: VisualDensity.compact),
-            ],
+            children: [for (final tag in details.tags) _tagChip(tag)],
           ),
           const SizedBox(height: 12),
         ],

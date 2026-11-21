@@ -1,3 +1,5 @@
+import 'services/work_tag_link.dart';
+import 'services/tag_browse_plan.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +28,8 @@ class RuleBrowsePage extends StatefulWidget {
     this.targetUrl,
     this.workTitle,
     this.workThumbnail,
+    this.listTitle,
+    this.pagingNotice,
   });
 
   final SavedSiteRule site;
@@ -33,6 +37,8 @@ class RuleBrowsePage extends StatefulWidget {
   final String? targetUrl;
   final String? workTitle;
   final Uri? workThumbnail;
+  final String? listTitle;
+  final String? pagingNotice;
 
   @override
   State<RuleBrowsePage> createState() => _RuleBrowsePageState();
@@ -172,6 +178,19 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   }
 
   Widget _pagingFooter() {
+    if (_isWorks &&
+        _pagination == null &&
+        widget.pagingNotice != null &&
+        !_busy &&
+        _result != null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        child: Text(
+          widget.pagingNotice!,
+          style: const TextStyle(color: Colors.white54),
+        ),
+      );
+    }
     if (!_isWorks || _pagination == null || _busy || _result == null) {
       return const SizedBox.shrink();
     }
@@ -271,6 +290,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             details: details,
             fallbackTitle: widget.workTitle ?? '',
             fallbackThumbnail: widget.workThumbnail,
+            onTagTap: (tag) => _openTag(tag),
           ),
           if (widget.targetUrl != null) ...[
             const SizedBox(height: 16),
@@ -317,6 +337,35 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         ],
       ),
     );
+  }
+
+  Future<void> _openTag(WorkTagLink tag) async {
+    if (_busy || _openingItem) return;
+
+    _openingItem = true;
+
+    try {
+      final plan = await makeTagBrowsePlanSafely(widget.site, tag);
+      if (!mounted) return;
+
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => RuleBrowsePage(
+            site: plan.site,
+            listTitle: tag.label,
+            pagingNotice: plan.notice,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('タグ一覧を開けませんでした：$error')));
+      }
+    } finally {
+      _openingItem = false;
+    }
   }
 
   bool get _isWorks => widget.kind == 'works';
@@ -700,7 +749,11 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: Colors.black,
     appBar: AppBar(
-      title: Text(_isWorks ? widget.site.name : widget.workTitle ?? 'チャプター一覧'),
+      title: Text(
+        _isWorks
+            ? widget.listTitle ?? widget.site.name
+            : widget.workTitle ?? 'チャプター一覧',
+      ),
       actions: [
         IconButton(
           tooltip: '保存済みを開く',

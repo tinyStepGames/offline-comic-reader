@@ -1,3 +1,4 @@
+import 'work_tag_link.dart';
 import 'dart:async';
 import 'dart:isolate';
 
@@ -14,6 +15,7 @@ class WorkPageDetails {
     this.thumbnail,
     this.description = '',
     this.tags = const [],
+    this.tagLinks = const [],
     this.chapterNumbers = const [],
     this.issues = const [],
   });
@@ -22,6 +24,7 @@ class WorkPageDetails {
   final Uri? thumbnail;
   final String description;
   final List<String> tags;
+  final List<WorkTagLink> tagLinks;
   final List<String> chapterNumbers;
   final List<String> issues;
 }
@@ -67,6 +70,7 @@ WorkPageDetails extractWorkPageDetails(
   final issues = <String>[];
   final values = <String, String>{};
   final tags = <String>[];
+  final tagLinks = <WorkTagLink>[];
   final numbers = <String>[];
 
   var baseUri = page.uri;
@@ -95,8 +99,28 @@ WorkPageDetails extractWorkPageDetails(
           issues.add('タグ：先頭100件まで取得しました');
         }
         for (final element in elements.take(100)) {
-          final value = _readValue(element, field);
-          if (value.isNotEmpty && !tags.contains(value)) tags.add(value);
+          try {
+            final value = _readValue(element, field);
+            if (value.isEmpty) continue;
+
+            if (!tags.contains(value)) {
+              tags.add(value);
+            }
+
+            final link = workTagLinkForElement(
+              element: element,
+              label: value,
+              pageUri: page.uri,
+              baseUri: baseUri,
+            );
+
+            if (link != null &&
+                !tagLinks.any((item) => item.label == link.label)) {
+              tagLinks.add(link);
+            }
+          } catch (error) {
+            issues.add('タグ：$error');
+          }
         }
       } else {
         if (elements.length > 1) {
@@ -147,6 +171,7 @@ WorkPageDetails extractWorkPageDetails(
     thumbnail: thumbnail,
     description: values['description'] ?? '',
     tags: List.unmodifiable(tags),
+    tagLinks: List.unmodifiable(tagLinks),
     chapterNumbers: List.unmodifiable(numbers),
     issues: List.unmodifiable(issues),
   );

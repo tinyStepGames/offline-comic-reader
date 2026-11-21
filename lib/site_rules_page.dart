@@ -1,3 +1,4 @@
+import 'tag_navigation_editor_page.dart';
 import 'services/last_opened_site_store.dart';
 import 'package:flutter/material.dart';
 
@@ -118,6 +119,19 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           initialRule: rule,
           savedSite: site,
         ),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _editTagNavigation(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            TagNavigationEditorPage(store: widget.store, site: site),
       ),
     );
 
@@ -330,6 +344,23 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
                   },
           ),
           _slot(site, 'works', '作品一覧'),
+          ListTile(
+            leading: Icon(
+              site.tagNavigation == null
+                  ? Icons.label_outline
+                  : Icons.check_circle_outline,
+            ),
+            title: const Text('タグ先の作品一覧'),
+            subtitle: Text(
+              site.tagNavigation == null
+                  ? '未設定・通常の作品一覧ルールを使用'
+                  : '専用設定あり・タップして編集\n'
+                        '${site.tagNavigation!.rule.pageUrl}',
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: _busy ? null : () => _editTagNavigation(site),
+          ),
           _slot(site, 'chapters', 'チャプター一覧'),
           ListTile(
             title: const Text('本文画像'),

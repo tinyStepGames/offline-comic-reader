@@ -21,6 +21,7 @@ class ListRuleLabPage extends StatefulWidget {
     required this.initialAcquisition,
     this.initialRule,
     this.savedSite,
+    this.onSaveRule,
   });
 
   final DownloadStore store;
@@ -30,6 +31,7 @@ class ListRuleLabPage extends StatefulWidget {
   final String initialAcquisition;
   final ListExtractionRule? initialRule;
   final SavedSiteRule? savedSite;
+  final Future<void> Function(ListExtractionRule rule)? onSaveRule;
 
   @override
   State<ListRuleLabPage> createState() => _ListRuleLabPageState();
@@ -274,6 +276,26 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
     setState(() => _busy = true);
 
     try {
+      if (widget.onSaveRule != null) {
+        final rule = _rule();
+        rule.validate();
+
+        if (rule.kind != 'works') {
+          throw const FormatException('タグ先は作品一覧として設定してください');
+        }
+
+        await widget.onSaveRule!(rule);
+
+        if (mounted) {
+          setState(() {
+            _status =
+                'タグ先の一覧ルールとURL変換設定を保存しました。'
+                'この画面で保存は完了しています。追加の保存操作は不要です。';
+          });
+        }
+        return;
+      }
+
       final saved = await SiteRuleStore(
         widget.store.root,
       ).save(id: _savedSiteId, name: _siteName.text, rule: _rule());
@@ -359,6 +381,9 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       false;
 
   void _apply(ListExtractionRule rule) {
+    if (widget.onSaveRule != null && rule.kind != 'works') {
+      throw const FormatException('タグ先には作品一覧ルールを取り込んでください');
+    }
     final samePage =
         _page?.uri.toString() == rule.pageUrl &&
         _acquisition == rule.acquisition;
@@ -664,7 +689,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('一覧ルール'),
+        title: Text(widget.onSaveRule == null ? '一覧ルール' : 'タグ先の一覧ルール'),
         actions: [
           IconButton(
             tooltip: '下書きを復元',
@@ -782,7 +807,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
                 DropdownMenuItem(value: 'works', child: Text('作品一覧')),
                 DropdownMenuItem(value: 'chapters', child: Text('チャプター一覧')),
               ],
-              onChanged: _busy
+              onChanged: _busy || widget.onSaveRule != null
                   ? null
                   : (value) {
                       if (value != null) {
