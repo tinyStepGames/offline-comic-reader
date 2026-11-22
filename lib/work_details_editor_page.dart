@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'rule_acquisition_notice.dart';
+
 import 'editor_unsaved_changes.dart';
 
 import 'element_inspector_page.dart';
@@ -341,6 +343,18 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage>
                 'タイトル・表紙・説明・タグは作品ページ全体から抽出します。\n'
                 '並び替え用の話数だけは、1話ずつのまとまりから抽出します。\n'
                 '要素選択を使用すると、取得方式は「表示後HTML」になります。',
+              ),
+              const SizedBox(height: 12),
+              RuleAcquisitionNotice(
+                title: '親画面へ反映する取得方式',
+                acquisition: _usedRenderedDom
+                    ? 'renderedDom'
+                    : widget.rule.acquisition,
+                pageAvailable: _page != null,
+                canFetchStaticHere: false,
+                saveHint:
+                    '「設定を反映して戻る」で前の一覧設定へ渡します。'
+                    'その後、一覧設定の「サイトに保存」で確定します。',
               ),
               const SizedBox(height: 12),
               for (final entry in workDetailLabels.entries)

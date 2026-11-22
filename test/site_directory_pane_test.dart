@@ -26,10 +26,10 @@ void main() {
       ),
     );
 
-    expect(find.text('追加・JSON／QR'), findsOneWidget);
-    expect(find.text('ルール制作室'), findsOneWidget);
+    expect(find.text('サイト管理・JSON／QR'), findsOneWidget);
+    expect(find.text('新規サイトルール作成'), findsOneWidget);
 
-    await tester.tap(find.text('ルール制作室'));
+    await tester.tap(find.text('新規サイトルール作成'));
     expect(labOpened, isTrue);
 
     await tester.ensureVisible(find.text('ペッパー＆キャロット'));

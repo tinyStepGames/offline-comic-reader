@@ -3,7 +3,7 @@ import 'site_rules_page.dart';
 import 'rule_browse_page.dart';
 import 'services/site_rule_store.dart';
 import 'services/last_opened_site_store.dart';
-import 'html_rule_lab_page.dart';
+import 'list_rule_lab_page.dart';
 import 'saved_downloads_page.dart';
 import 'chapter_read_state_widgets.dart';
 import 'services/chapter_read_state_store.dart';
@@ -173,7 +173,13 @@ class _SourceHomeState extends State<SourceHome> {
   Future<void> _openRuleLab() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => HtmlRuleLabPage(store: widget.store),
+        builder: (_) => ListRuleLabPage(
+          store: widget.store,
+          initialPage: null,
+          initialUrl: 'https://',
+          initialSelector: '',
+          initialAcquisition: 'staticHtml',
+        ),
       ),
     );
 
@@ -408,9 +414,9 @@ class _SourceHomeState extends State<SourceHome> {
                 actions: [
                   if (_section == 0 || _section == 4)
                     IconButton(
-                      tooltip: 'HTMLルール制作室',
+                      tooltip: '新規サイトルール作成',
                       onPressed: _loading ? null : _openRuleLab,
-                      icon: const Icon(Icons.code),
+                      icon: const Icon(Icons.add_circle_outline),
                     ),
                   if (_section == 4)
                     IconButton(

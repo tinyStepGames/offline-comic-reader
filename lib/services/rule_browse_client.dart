@@ -193,6 +193,22 @@ class RuleBrowseClient {
 
     for (var index = 0; index < report.rows.length; index++) {
       final row = report.rows[index];
+
+      // Empty work layout slots:
+      // 完全に空の作品枠だけを、通常の閲覧一覧から除外する。
+      // 抽出レポート自体は変更せず、設定画面の診断を維持する。
+      // 片方だけ欠落した項目や、処理エラーのある項目は残す。
+      final emptyWorkSlot =
+          kind == 'works' &&
+          (row.values['title'] ?? '').trim().isEmpty &&
+          (row.values['url'] ?? '').trim().isEmpty &&
+          row.values.values.every((value) => value.trim().isEmpty) &&
+          row.issues.every(
+            (issue) => issue == 'タイトル：取得できません' || issue == 'リンク：取得できません',
+          );
+
+      if (emptyWorkSlot) continue;
+
       final issues = List<String>.of(row.issues);
       final title = row.values['title']?.trim() ?? '';
       Uri? url;

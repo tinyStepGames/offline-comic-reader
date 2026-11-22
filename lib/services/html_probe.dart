@@ -66,6 +66,14 @@ String decodeProbeHtml(List<int> bytes, String contentType) {
   return source;
 }
 
+/// HTML取得時のHTTPエラー。従来と同じStateError系として扱う。
+class HtmlProbeHttpException extends StateError {
+  HtmlProbeHttpException(this.statusCode)
+    : super('HTMLを取得できませんでした: HTTP $statusCode');
+
+  final int statusCode;
+}
+
 class HtmlProbeClient {
   static const maxBytes = 2 * 1024 * 1024;
 
@@ -119,7 +127,7 @@ class HtmlProbeClient {
 
       if (status < 200 || status >= 300) {
         await body.stream.listen((_) {}).cancel();
-        throw StateError('HTMLを取得できませんでした: HTTP $status');
+        throw HtmlProbeHttpException(status);
       }
 
       final contentType = response.headers.value('content-type') ?? '';

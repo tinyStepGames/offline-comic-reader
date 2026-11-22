@@ -1,12 +1,15 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import 'rule_acquisition_notice.dart';
+
 import 'editor_unsaved_changes.dart';
 
 import 'element_inspector_page.dart';
 import 'work_details_editor_page.dart';
 import 'services/download_store.dart';
 import 'services/html_probe.dart';
+import 'services/rule_diagnostics.dart';
 import 'services/list_extraction_rule.dart';
 import 'services/list_field_pick.dart';
 import 'services/site_rule_store.dart';
@@ -176,7 +179,11 @@ class _ListRuleLabPageState extends State<ListRuleLabPage>
         _status = '通常HTMLを取得しました。テストしてください';
       });
     } catch (error) {
-      if (mounted) setState(() => _status = '取得できませんでした：$error');
+      if (mounted) {
+        setState(() {
+          _status = ruleFailureMessage(error, stage: RuleDiagnosticStage.fetch);
+        });
+      }
     } finally {
       if (identical(_cancel, token)) _cancel = null;
       if (mounted) setState(() => _busy = false);
@@ -285,13 +292,17 @@ class _ListRuleLabPageState extends State<ListRuleLabPage>
         _status =
             '${report.total}件のまとまり／'
             '先頭${report.rows.length}件を表示\n'
-            '取得元：$_acquisition';
+            '取得元：$_acquisition'
+            '${listReportAdvice(report, acquisition: _acquisition)}';
       });
     } catch (error) {
       if (mounted) {
         setState(() {
           _report = null;
-          _status = 'テストできませんでした：$error';
+          _status = ruleFailureMessage(
+            error,
+            stage: RuleDiagnosticStage.extraction,
+          );
         });
       }
     } finally {
@@ -678,7 +689,10 @@ class _ListRuleLabPageState extends State<ListRuleLabPage>
                 ],
               ),
             for (final issue in row.issues)
-              Text(issue, style: const TextStyle(color: Colors.orangeAccent)),
+              Text(
+                ruleIssueMessage(issue),
+                style: const TextStyle(color: Colors.orangeAccent),
+              ),
           ],
         ),
       ),
@@ -706,7 +720,11 @@ class _ListRuleLabPageState extends State<ListRuleLabPage>
       appBar: AppBar(
         leading: editorBackButton,
         title: Text(
-          widget.onSaveRule == null ? '一覧ルール' : '${widget.rulePurpose}の一覧ルール',
+          widget.onSaveRule != null
+              ? '${widget.rulePurpose}の一覧ルール'
+              : _savedSiteId == null
+              ? '新規サイトルール作成'
+              : '一覧ルール',
         ),
         actions: [
           IconButton(
@@ -750,6 +768,16 @@ class _ListRuleLabPageState extends State<ListRuleLabPage>
                 icon: const Icon(Icons.bookmark_add_outlined),
                 label: const Text('サイトに保存'),
               ),
+            ),
+            const SizedBox(height: 16),
+            RuleAcquisitionNotice(
+              acquisition: _acquisition,
+              pageAvailable:
+                  _page != null && _page!.uri.toString() == _url.text.trim(),
+              saveHint:
+                  'この表示は現在の編集値です。'
+                  '設定の変更は「サイトに保存」で確定します。'
+                  '下書き保存だけではサイト設定は変更されません。',
             ),
             const SizedBox(height: 16),
             TextField(

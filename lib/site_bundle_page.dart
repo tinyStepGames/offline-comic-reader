@@ -9,6 +9,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'services/site_rule_bundle.dart';
 import 'site_bundle_qr_page.dart';
 import 'services/site_rule_store.dart';
+import 'services/site_import_comparison.dart';
+import 'site_import_comparison_panel.dart';
 
 class SiteBundlePage extends StatefulWidget {
   const SiteBundlePage({super.key, required this.repository, this.initialSite});
@@ -27,6 +29,9 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
   List<SavedSiteRule> _sites = [];
 
   String _target = '';
+
+  // 未選択 / 新規追加 / 既存サイト更新。
+  String _importMode = '';
   String? _qr;
   String _status = '';
 
@@ -132,6 +137,7 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
         _bundle = bundle;
         _sites = sites;
         _target = '';
+        _importMode = '';
         _status = '形式を確認しました。まだ通信・保存はしていません。';
       });
     } catch (error) {
@@ -223,13 +229,33 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
         true;
   }
 
+  SavedSiteRule? get _selectedTarget {
+    if (_target.isEmpty) return null;
+    for (final site in _sites) {
+      if (site.id == _target) return site;
+    }
+    return null;
+  }
+
+  bool get _canApplyImport {
+    if (_busy || _bundle == null || _exporting) return false;
+    if (_importMode == 'new') return true;
+    return _importMode == 'update' && _selectedTarget != null;
+  }
+
   Future<void> _apply() async {
     final bundle = _bundle;
 
-    if (_busy || bundle == null || _exporting) return;
+    if (!_canApplyImport || bundle == null) return;
 
-    final matches = _sites.where((site) => site.id == _target);
-    final target = matches.isEmpty ? null : matches.single;
+    final target = _importMode == 'update' ? _selectedTarget : null;
+
+    if (_importMode == 'update' && target == null) {
+      setState(() {
+        _status = '反映先が見つかりません。内容を確認し直してください。';
+      });
+      return;
+    }
 
     // 確認ダイアログを含めて二重実行を防ぐ。
     setState(() => _busy = true);
@@ -237,9 +263,42 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
     CancelToken? token;
 
     try {
+      // 比較表示後に保存先が変わっていないか、外部通信前に確認する。
+      if (target != null) {
+        final latestSites = await widget.repository.load();
+        if (!mounted) return;
+
+        SavedSiteRule? latestTarget;
+        for (final site in latestSites) {
+          if (site.id == target.id) {
+            latestTarget = site;
+            break;
+          }
+        }
+
+        if (latestTarget == null ||
+            latestTarget.updatedAt != target.updatedAt) {
+          setState(() {
+            _sites = latestSites;
+            if (latestTarget == null) _target = '';
+            _status =
+                '反映先が変更または削除されました。'
+                '比較表示を更新したので、反映先と変更内容を確認してください。'
+                '通信・保存はしていません。';
+          });
+          return;
+        }
+      }
+
+      final comparison = SiteImportComparison.compare(
+        incoming: bundle.site,
+        target: target,
+      );
+
       final confirmed = await _confirm(
-        title: 'サイト設定を反映しますか？',
+        title: target == null ? '新しいサイトとして追加しますか？' : 'サイト設定を更新しますか？',
         message:
+            '${comparison.toText()}\n\n'
             '${_summary(bundle.site)}\n\n'
             '${target == null ? '新しいサイトとして追加します。' : '「${target.name}」の設定一式を置き換えます。共有側にない設定は未設定になります。'}\n\n'
             '続けると、この設定のURLへ通常HTML取得の通信を行います。'
@@ -351,12 +410,24 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
   @override
   Widget build(BuildContext context) {
     final bundle = _bundle;
+    final selectedTarget = _selectedTarget;
+    final comparison =
+        bundle != null &&
+            !_exporting &&
+            _importMode == 'update' &&
+            selectedTarget != null
+        ? SiteImportComparison.compare(
+            incoming: bundle.site,
+            target: selectedTarget,
+          )
+        : null;
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(title: Text(_exporting ? 'サイト一式のJSON・QR' : 'サイト一式を取り込む')),
       body: SafeArea(
         child: ListView(
+          key: const ValueKey('site-bundle-scroll'),
           padding: const EdgeInsets.all(16),
           children: [
             const Text(
@@ -368,6 +439,7 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
             ),
             const SizedBox(height: 16),
             TextField(
+              key: const ValueKey('site-bundle-input'),
               controller: _text,
               readOnly: _exporting || _busy,
               minLines: 7,
@@ -380,7 +452,11 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
               ),
               onChanged: (_) {
                 if (_bundle != null) {
-                  setState(() => _bundle = null);
+                  setState(() {
+                    _bundle = null;
+                    _target = '';
+                    _importMode = '';
+                  });
                 }
               },
             ),
@@ -406,6 +482,7 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
                 ],
                 if (!_exporting) ...[
                   OutlinedButton(
+                    key: const ValueKey('site-bundle-inspect'),
                     onPressed: _busy ? null : _inspect,
                     child: const Text('内容を確認'),
                   ),
@@ -432,44 +509,191 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
             SelectableText(_status),
             if (bundle != null) ...[
               const SizedBox(height: 20),
-              SelectableText(_summary(bundle.site)),
-              if (!_exporting) ...[
-                const SizedBox(height: 16),
-                const Text('反映先'),
-                DropdownButton<String>(
-                  value: _target,
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('新しいサイトとして追加'),
-                    ),
-                    for (final site in _sites)
-                      DropdownMenuItem(
-                        value: site.id,
-                        child: Text(
-                          '${site.name} を更新',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: _busy
-                      ? null
-                      : (value) {
-                          setState(() {
-                            _target = value ?? '';
-                          });
-                        },
+              if (_exporting)
+                SelectableText(_summary(bundle.site))
+              else ...[
+                Text(
+                  '取り込むサイト：${bundle.site.name}',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
+                const SizedBox(height: 16),
+                Text(
+                  '1. 取り込み方法を選んでください',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
                 const Text(
-                  '更新では選択した保存先のIDを維持します。'
-                  'サイト名が同じでも自動では上書きしません。',
+                  '別のサイトとして増やす場合は「新しく追加」、'
+                  '保存済みの設定と比べて置き換える場合は'
+                  '「既存サイトを更新」を選びます。',
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    ChoiceChip(
+                      key: const ValueKey('site-import-mode-new'),
+                      avatar: const Icon(Icons.add_circle_outline),
+                      label: const Text('新しく追加'),
+                      selected: _importMode == 'new',
+                      onSelected: _busy
+                          ? null
+                          : (_) {
+                              setState(() {
+                                _importMode = 'new';
+                                _target = '';
+                              });
+                            },
+                    ),
+                    ChoiceChip(
+                      key: const ValueKey('site-import-mode-update'),
+                      avatar: const Icon(Icons.sync),
+                      label: const Text('既存サイトを更新'),
+                      selected: _importMode == 'update',
+                      onSelected: _busy
+                          ? null
+                          : (_) {
+                              setState(() {
+                                _importMode = 'update';
+                                _target = '';
+                              });
+                            },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (_importMode.isEmpty)
+                  const Text(
+                    'まだ取り込み方法が選ばれていません。'
+                    '上のどちらかを選ぶと先へ進めます。',
+                    key: ValueKey('site-import-mode-required'),
+                  ),
+                if (_importMode == 'new')
+                  Card(
+                    key: const ValueKey('site-import-new-notice'),
+                    margin: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '新しいサイトとして追加します',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          Text('追加するサイト名：${bundle.site.name}'),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '保存済みのサイトは変更しません。'
+                            '同じ名前のサイトがあっても、別のサイトとして追加します。',
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'これは既存サイトとの比較ではありません。'
+                            '「変更なし」などを確認したい場合は、'
+                            '「既存サイトを更新」を選んでください。',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (_importMode == 'update') ...[
+                  Text(
+                    '2. 更新する保存済みサイトを選んでください',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '選んだサイトと取り込み内容を比較します。'
+                    '同じ名前でも自動では選択・上書きしません。',
+                  ),
+                  DropdownButton<String>(
+                    key: const ValueKey('site-import-target'),
+                    value: _target,
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: '',
+                        child: Text('更新するサイトを選択してください'),
+                      ),
+                      for (final site in _sites)
+                        DropdownMenuItem<String>(
+                          value: site.id,
+                          child: Text(
+                            site.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: _busy
+                        ? null
+                        : (value) {
+                            setState(() {
+                              _target = value ?? '';
+                            });
+                          },
+                  ),
+                  if (_sites.isEmpty)
+                    const Text(
+                      '更新できる保存済みサイトがありません。'
+                      '追加する場合は「新しく追加」を選んでください。',
+                    )
+                  else if (selectedTarget == null)
+                    const Text(
+                      '更新先を選ぶまで、比較は表示されず反映もできません。',
+                      key: ValueKey('site-import-target-required'),
+                    ),
+                ],
+                if (comparison != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '比較する保存済みサイト：${comparison.targetName}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '下の「変更なし」は選択したサイトと同じ設定、'
+                    '「新規追加」はそのサイトに追加される設定です。'
+                    '「削除されます」の項目は更新後に残りません。',
+                  ),
+                  const SizedBox(height: 12),
+                  SiteImportComparisonPanel(comparison: comparison),
+                ],
+                const SizedBox(height: 16),
+                const Text(
+                  '取り込み方法・更新先を選んだだけでは通信・保存しません。'
+                  '反映ボタンを押した後にも確認画面を表示します。',
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  key: const ValueKey('site-bundle-apply'),
+                  onPressed: _canApplyImport ? _apply : null,
+                  icon: const Icon(Icons.download_done),
+                  label: Text(
+                    _importMode == 'new'
+                        ? '追加内容を確認する'
+                        : _importMode == 'update'
+                        ? '更新内容を確認する'
+                        : '取り込み方法を選んでください',
+                  ),
                 ),
                 const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: _busy ? null : _apply,
-                  icon: const Icon(Icons.download_done),
-                  label: const Text('通常HTMLを取得して反映'),
+                ExpansionTile(
+                  key: const ValueKey('site-import-settings-details'),
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('取り込む設定の詳細を見る'),
+                  subtitle: const Text('取得方式・設定URL・共有時の注意事項'),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SelectableText(_summary(bundle.site)),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ],

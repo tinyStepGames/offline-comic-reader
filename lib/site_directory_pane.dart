@@ -48,14 +48,14 @@ class SiteDirectoryPane extends StatelessWidget {
             runSpacing: 8,
             children: [
               FilledButton.icon(
-                onPressed: () => onManage(null),
-                icon: const Icon(Icons.add),
-                label: const Text('追加・JSON／QR'),
+                onPressed: busy ? null : onLab,
+                icon: const Icon(Icons.add_circle_outline),
+                label: const Text('新規サイトルール作成'),
               ),
               OutlinedButton.icon(
-                onPressed: onLab,
-                icon: const Icon(Icons.code),
-                label: const Text('ルール制作室'),
+                onPressed: busy ? null : () => onManage(null),
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('サイト管理・JSON／QR'),
               ),
             ],
           ),
@@ -115,7 +115,8 @@ class SiteDirectoryPane extends StatelessWidget {
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Text(
                 '作成したサイトはここに表示されます。\n'
-                '「追加・JSON／QR」から登録できます。',
+                '「新規サイトルール作成」で作成するか、'
+                '「サイト管理・JSON／QR」から取り込めます。',
                 style: TextStyle(color: Colors.white60),
               ),
             ),

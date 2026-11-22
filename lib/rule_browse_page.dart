@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'services/headless_download_page.dart';
 import 'services/browse_snapshot_cache.dart';
 import 'services/html_probe.dart';
+import 'services/rule_diagnostics.dart';
 import 'rule_collection_grid.dart';
 import 'services/rule_browse_client.dart';
 import 'services/site_rule_store.dart';
@@ -243,7 +244,17 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             nextPage < PageUrlTemplate.maxPage;
 
         if (next.total == 0) {
-          _pagingEnd = '次のページに作品が見つかりませんでした。';
+          _pagingEnd =
+              '追加取得を停止しました。\n'
+              '${emptyListAdvice(total: 0, acquisition: widget.site.rules['works']?.acquisition ?? '')}';
+        } else if (next.items.isEmpty) {
+          _pagingEnd =
+              '追加取得を停止しました。\n'
+              '${emptyListAdvice(total: next.total, acquisition: widget.site.rules['works']?.acquisition ?? '')}';
+        } else if (!next.items.any((item) => item.url != null)) {
+          _pagingEnd =
+              '追加ページにはまとまりがありましたが、'
+              '開ける項目がありませんでした。タイトル・リンクの設定を確認してください。';
         } else if (accepted.isEmpty) {
           _pagingEnd = '新しい作品がなかったため、追加取得を停止しました。';
         } else if (!_hasMore) {
@@ -257,7 +268,9 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         return;
       }
       setState(() {
-        _moreError = '次のページを取得できませんでした：$error';
+        _moreError =
+            '次のページを取得できませんでした。\n'
+            '${ruleFailureMessage(error, stage: RuleDiagnosticStage.browsing)}';
       });
     } finally {
       if (mounted && generation == _generation) {
@@ -629,9 +642,12 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             items.any((item) => item.url != null) &&
             _lastPage < PageUrlTemplate.maxPage;
 
-        _status = items.isEmpty
-            ? '一覧が見つかりませんでした。URLとまとまりの設定を確認してください。'
-            : '${items.length}件を取得しました';
+        _status = browseListStatus(
+          total: result.total,
+          itemCount: items.length,
+          openableCount: items.where((item) => item.url != null).length,
+          acquisition: widget.site.rules[widget.kind]?.acquisition ?? '',
+        );
       });
 
       _fetchedAt = DateTime.now();
@@ -648,7 +664,12 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
       if (!mounted || generation != _generation || cancel.isCancelled) {
         return;
       }
-      setState(() => _status = '取得できませんでした：$error');
+      setState(() {
+        _status = ruleFailureMessage(
+          error,
+          stage: RuleDiagnosticStage.browsing,
+        );
+      });
     } finally {
       if (mounted && generation == _generation) {
         setState(() => _busy = false);
@@ -866,7 +887,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
                   if (item.url == null && item.issues.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
-                      item.issues.join('\n'),
+                      item.issues.map(ruleIssueMessage).join('\n'),
                       maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

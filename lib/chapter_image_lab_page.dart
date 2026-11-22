@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import 'rule_acquisition_notice.dart';
+
 import 'editor_unsaved_changes.dart';
 import 'package:flutter/services.dart';
 
@@ -486,11 +488,19 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage>
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Text(
-                      _page == null
-                          ? 'HTML：未取得'
-                          : 'HTML：${_acquisition == 'renderedDom' ? '表示後HTML' : '通常HTML'}',
-                      style: const TextStyle(color: Colors.white60),
+                    RuleAcquisitionNotice(
+                      acquisition: _acquisition,
+                      pageAvailable:
+                          _page != null &&
+                          _page!.uri.toString() == _url.text.trim(),
+                      saveHint:
+                          widget.repository != null && widget.savedSite != null
+                          ? 'この表示は現在の編集値です。'
+                                '画像URLの抽出と表示を確認し、'
+                                '「本文画像ルールをサイトに保存」で確定します。'
+                          : 'この画面では抽出を確認できます。'
+                                'サイトへ保存する場合は、'
+                                'サイト管理の「本文画像」から開いてください。',
                     ),
                     const SizedBox(height: 12),
                     TextField(

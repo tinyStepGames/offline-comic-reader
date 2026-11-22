@@ -438,7 +438,7 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
               FilledButton.icon(
                 onPressed: _busy ? null : () => _edit(null, 'works'),
                 icon: const Icon(Icons.add),
-                label: const Text('新しいサイト'),
+                label: const Text('新規サイトルール作成'),
               ),
 
               OutlinedButton.icon(

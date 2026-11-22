@@ -195,8 +195,18 @@ class ListExtractionRule {
       }
     }
 
-    for (final field in [...fields.values, ...details.values]) {
-      validateListTransform(field.pattern, field.replacement);
+    for (final entry in [...fields.entries, ...details.entries]) {
+      final field = entry.value;
+      final label =
+          listFieldLabels[entry.key] ??
+          workDetailLabels[entry.key] ??
+          entry.key;
+
+      try {
+        validateListTransform(field.pattern, field.replacement);
+      } on FormatException catch (error) {
+        throw FormatException('$label：正規表現・整形テンプレートの設定が不正です：${error.message}');
+      }
       if (field.selector.length > 2048 || field.attribute.length > 128) {
         throw const FormatException('項目設定が長すぎます');
       }
@@ -396,7 +406,13 @@ ListExtractionReport extractListRows(
     }
   }
 
-  final groups = document.querySelectorAll(rule.groupSelector);
+  final List<Element> groups;
+  try {
+    groups = document.querySelectorAll(rule.groupSelector);
+  } catch (error) {
+    throw FormatException('まとまりのセレクターが不正です：$error');
+  }
+
   final rows = <ExtractedListRow>[];
 
   for (final group in groups.take(maxRows)) {
@@ -411,9 +427,17 @@ ListExtractionReport extractListRows(
       if (!field.enabled) continue;
 
       try {
-        final matches = field.selector.trim().isEmpty
-            ? <Element>[group]
-            : group.querySelectorAll(field.selector);
+        final List<Element> matches;
+        if (field.selector.trim().isEmpty) {
+          matches = <Element>[group];
+        } else {
+          try {
+            matches = group.querySelectorAll(field.selector);
+          } catch (error) {
+            throw FormatException('項目のセレクターが不正です：$error');
+          }
+        }
+
         final element = matches.isEmpty ? null : matches.first;
 
         if (matches.length > 1) {
