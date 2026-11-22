@@ -1,5 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+
+import 'editor_unsaved_changes.dart';
 import 'package:flutter/services.dart';
 
 import 'element_inspector_page.dart';
@@ -29,7 +31,21 @@ class ChapterImageLabPage extends StatefulWidget {
   State<ChapterImageLabPage> createState() => _ChapterImageLabPageState();
 }
 
-class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
+class _ChapterImageLabPageState extends State<ChapterImageLabPage>
+    with EditorUnsavedChanges<ChapterImageLabPage> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  List<TextEditingController> get editorInputs => [_url, _selector, _attribute];
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    'url': _url.text.trim(),
+    'selector': _selector.text.trim(),
+    'attribute': _attribute.text.trim(),
+    'acquisition': _acquisition,
+  });
   late final TextEditingController _url;
   final _selector = TextEditingController();
   final _attribute = TextEditingController(text: 'src');
@@ -279,6 +295,7 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
 
       if (!mounted) return;
       setState(() {
+        markEditorSaved();
         _status =
             '「${site.name}」に本文画像ルールを保存しました。'
             'リーダーへの接続は次の段階です。';
@@ -396,12 +413,15 @@ class _ChapterImageLabPageState extends State<ChapterImageLabPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) {
     final report = _report;
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
+        leading: editorBackButton,
         title: const Text('本文画像テスト'),
         actions: [
           IconButton(

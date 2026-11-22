@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'editor_unsaved_changes.dart';
+
 import 'list_rule_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
@@ -260,7 +262,22 @@ class _SiteBrowseTabForm extends StatefulWidget {
   State<_SiteBrowseTabForm> createState() => _SiteBrowseTabFormState();
 }
 
-class _SiteBrowseTabFormState extends State<_SiteBrowseTabForm> {
+class _SiteBrowseTabFormState extends State<_SiteBrowseTabForm>
+    with EditorUnsavedChanges<_SiteBrowseTabForm> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  List<TextEditingController> get editorInputs => [_title, _url, _pagination];
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    'title': _title.text.trim(),
+    'url': _url.text.trim(),
+    'pagination': _pagination.text.trim(),
+    'source': _source,
+    'rule': _source == 'custom' ? _customRule?.toJson() : null,
+  });
   late final String _id;
   late final TextEditingController _title;
   late final TextEditingController _url;
@@ -319,6 +336,7 @@ class _SiteBrowseTabFormState extends State<_SiteBrowseTabForm> {
       setState(() {
         _source = tab.ruleSource;
         _customRule = tab.customRule;
+        markEditorSaved();
         _status = 'タブを保存しました。追加の保存操作は不要です。';
       });
     } finally {
@@ -386,9 +404,11 @@ class _SiteBrowseTabFormState extends State<_SiteBrowseTabForm> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) => Scaffold(
     backgroundColor: Colors.black,
-    appBar: AppBar(title: const Text('タブを編集')),
+    appBar: AppBar(leading: editorBackButton, title: const Text('タブを編集')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),

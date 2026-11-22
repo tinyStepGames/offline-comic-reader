@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'editor_unsaved_changes.dart';
+
 import 'element_inspector_page.dart';
 import 'services/html_probe.dart';
 import 'services/list_extraction_rule.dart';
@@ -27,7 +29,19 @@ class WorkDetailsEditorPage extends StatefulWidget {
   State<WorkDetailsEditorPage> createState() => _WorkDetailsEditorPageState();
 }
 
-class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage> {
+class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage>
+    with EditorUnsavedChanges<WorkDetailsEditorPage> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    'pageUrl': _page?.uri.toString() ?? widget.rule.pageUrl,
+    'acquisition': _usedRenderedDom ? 'renderedDom' : widget.rule.acquisition,
+    'fields': {
+      for (final entry in _fields.entries) entry.key: entry.value.toJson(),
+    },
+  });
   late Map<String, ListFieldRule> _fields;
   HtmlProbePage? _page;
   WorkPageDetails? _preview;
@@ -156,14 +170,18 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage> {
     }
   }
 
-  void _apply() {
+  Future<void> _apply() async {
+    if (_busy) return;
+
     try {
       _rule().validate();
-      Navigator.of(
-        context,
-      ).pop(WorkDetailEditResult(_enabledFields, _page, _usedRenderedDom));
+      await applyEditorResult(
+        WorkDetailEditResult(_enabledFields, _page, _usedRenderedDom),
+      );
     } catch (error) {
-      setState(() => _status = '設定を反映できませんでした：$error');
+      if (mounted) {
+        setState(() => _status = '設定を反映できませんでした：$error');
+      }
     }
   }
 
@@ -302,14 +320,19 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) {
     final preview = _preview;
 
     return PopScope(
       canPop: !_busy,
       child: Scaffold(
         backgroundColor: Colors.black,
-        appBar: AppBar(title: const Text('作品詳細・並び替え')),
+        appBar: AppBar(
+          leading: editorBackButton,
+          title: const Text('作品詳細・並び替え'),
+        ),
         body: SafeArea(
           child: ListView(
             padding: const EdgeInsets.all(16),

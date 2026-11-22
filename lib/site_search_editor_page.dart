@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'editor_unsaved_changes.dart';
+
 import 'list_rule_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
@@ -20,7 +22,22 @@ class SiteSearchEditorPage extends StatefulWidget {
   State<SiteSearchEditorPage> createState() => _SiteSearchEditorPageState();
 }
 
-class _SiteSearchEditorPageState extends State<SiteSearchEditorPage> {
+class _SiteSearchEditorPageState extends State<SiteSearchEditorPage>
+    with EditorUnsavedChanges<SiteSearchEditorPage> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  List<TextEditingController> get editorInputs => [_url];
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    'url': _url.text.trim(),
+    'normalizeSpaces': _normalizeSpaces,
+    'encoding': _encoding,
+    'useCustom': _useCustom,
+    'rule': _useCustom ? _customRule?.toJson() : null,
+  });
   late SavedSiteRule _site;
   late final TextEditingController _url;
   late final TextEditingController _query;
@@ -111,6 +128,7 @@ class _SiteSearchEditorPageState extends State<SiteSearchEditorPage> {
         _site = saved;
         _customRule = saved.searchSettings?.rule;
         _useCustom = _customRule != null;
+        markEditorSaved();
         _status = '検索設定を保存しました。追加の保存操作は不要です。';
       });
     } finally {
@@ -219,6 +237,7 @@ class _SiteSearchEditorPageState extends State<SiteSearchEditorPage> {
 
       setState(() {
         _site = saved;
+        markEditorSaved();
         _status = '検索設定を削除しました。';
       });
     } catch (error) {
@@ -229,9 +248,11 @@ class _SiteSearchEditorPageState extends State<SiteSearchEditorPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) => Scaffold(
     backgroundColor: Colors.black,
-    appBar: AppBar(title: const Text('検索設定')),
+    appBar: AppBar(leading: editorBackButton, title: const Text('検索設定')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),

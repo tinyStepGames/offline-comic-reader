@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
+import 'editor_unsaved_changes.dart';
+
 import 'element_inspector_page.dart';
 import 'work_details_editor_page.dart';
 import 'services/download_store.dart';
@@ -37,7 +39,34 @@ class ListRuleLabPage extends StatefulWidget {
   State<ListRuleLabPage> createState() => _ListRuleLabPageState();
 }
 
-class _ListRuleLabPageState extends State<ListRuleLabPage> {
+class _ListRuleLabPageState extends State<ListRuleLabPage>
+    with EditorUnsavedChanges<ListRuleLabPage> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  List<TextEditingController> get editorInputs => [
+    _url,
+    _group,
+    _paginationUrl,
+    _siteName,
+  ];
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    if (widget.onSaveRule == null) 'name': _siteName.text.trim(),
+    'url': _url.text.trim(),
+    'group': _group.text.trim(),
+    'pagination': _paginationUrl.text.trim(),
+    'kind': _kind,
+    'acquisition': _acquisition,
+    'fields': {
+      for (final entry in _fields.entries) entry.key: entry.value.toJson(),
+    },
+    'details': {
+      for (final entry in _details.entries) entry.key: entry.value.toJson(),
+    },
+  });
   static const _cacheKey = 'rule-lab:list-draft:v1';
 
   late final TextEditingController _url;
@@ -288,6 +317,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
 
         if (mounted) {
           setState(() {
+            markEditorSaved();
             _status =
                 '専用の一覧設定を保存しました。'
                 'この画面で保存は完了しています。追加の保存操作は不要です。';
@@ -304,6 +334,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       setState(() {
         _savedSiteId = saved.id;
         _siteName.text = saved.name;
+        markEditorSaved();
         _status =
             '「${saved.name}」の'
             '${_kind == 'works' ? '作品一覧' : 'チャプター一覧'}を保存しました。'
@@ -666,11 +697,14 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) {
     final report = _report;
 
     return Scaffold(
       appBar: AppBar(
+        leading: editorBackButton,
         title: Text(
           widget.onSaveRule == null ? '一覧ルール' : '${widget.rulePurpose}の一覧ルール',
         ),

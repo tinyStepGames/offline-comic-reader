@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'editor_unsaved_changes.dart';
+
 import 'list_rule_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/html_probe.dart';
@@ -22,7 +24,20 @@ class TagNavigationEditorPage extends StatefulWidget {
       _TagNavigationEditorPageState();
 }
 
-class _TagNavigationEditorPageState extends State<TagNavigationEditorPage> {
+class _TagNavigationEditorPageState extends State<TagNavigationEditorPage>
+    with EditorUnsavedChanges<TagNavigationEditorPage> {
+  @override
+  bool get editorBusy => _busy;
+
+  @override
+  List<TextEditingController> get editorInputs => [_pattern, _replacement];
+
+  @override
+  String get editorSnapshot => encodeEditorSnapshot({
+    'rule': _draftRule.toJson(),
+    'pattern': _pattern.text,
+    'replacement': _replacement.text,
+  });
   late SavedSiteRule _site;
   late ListExtractionRule _draftRule;
   late final TextEditingController _pattern;
@@ -127,6 +142,7 @@ class _TagNavigationEditorPageState extends State<TagNavigationEditorPage> {
       setState(() {
         _site = saved;
         _draftRule = checked;
+        markEditorSaved();
         _status =
             'タグ先の一覧ルールとURL変換設定を保存しました。'
             '追加の保存操作は不要です。';
@@ -195,6 +211,7 @@ class _TagNavigationEditorPageState extends State<TagNavigationEditorPage> {
 
       setState(() {
         _site = saved;
+        markEditorSaved();
         _status =
             'タグ先設定を保存しました。'
             '通常の作品一覧・チャプター・本文画像の設定は保持しています。';
@@ -251,6 +268,7 @@ class _TagNavigationEditorPageState extends State<TagNavigationEditorPage> {
         _pattern.clear();
         _replacement.clear();
         _preview = '';
+        markEditorSaved();
         _status =
             'タグ先専用設定を削除しました。'
             '通常の作品一覧ルールを使用します。';
@@ -265,9 +283,11 @@ class _TagNavigationEditorPageState extends State<TagNavigationEditorPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => guardEditor(_buildEditor(context));
+
+  Widget _buildEditor(BuildContext context) => Scaffold(
     backgroundColor: Colors.black,
-    appBar: AppBar(title: const Text('タグ先の作品一覧')),
+    appBar: AppBar(leading: editorBackButton, title: const Text('タグ先の作品一覧')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
