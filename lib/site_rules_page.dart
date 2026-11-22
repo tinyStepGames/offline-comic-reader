@@ -79,22 +79,17 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
     required String title,
     required String label,
     String initial = '',
-    bool multiline = false,
   }) => showDialog<String>(
     context: context,
     builder: (_) => _RuleTextDialog(
       title: title,
       label: label,
       initial: initial,
-      multiline: multiline,
+      multiline: false,
     ),
   );
 
-  Future<void> _edit(
-    SavedSiteRule? site,
-    String kind, {
-    ListExtractionRule? imported,
-  }) async {
+  Future<void> _edit(SavedSiteRule? site, String kind) async {
     if (_busy) return;
 
     final existing = site?.rules[kind];
@@ -102,7 +97,6 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
         ? 'https://'
         : site.rules.values.first.pageUrl;
     final rule =
-        imported ??
         existing ??
         ListExtractionRule(
           pageUrl: fallback,
@@ -202,42 +196,6 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
     );
   }
 
-  Future<void> _import() async {
-    if (_busy) return;
-    final text = await _askText(
-      title: '一覧ルールを取り込む',
-      label: '一覧JSONまたはQRの内容文字列',
-      multiline: true,
-    );
-    if (!mounted || text == null) return;
-
-    try {
-      final rule = ListExtractionRule.parse(text);
-      // この時点では保存も通信もしない。
-      await _edit(null, rule.kind, imported: rule);
-    } catch (error) {
-      if (mounted) {
-        setState(() => _status = '取り込めませんでした：$error');
-      }
-    }
-  }
-
-  Future<void> _share(SavedSiteRule site, String kind) async {
-    if (_busy) return;
-    final rule = site.rules[kind];
-    if (rule == null) return;
-
-    final imported = await Navigator.of(context).push<ListExtractionRule>(
-      MaterialPageRoute<ListExtractionRule>(
-        builder: (_) => ListRuleTransferPage(rule: rule),
-      ),
-    );
-
-    if (!mounted || imported == null) return;
-    // 共有画面で取り込んだ設定も、編集画面で保存するまでは反映しない。
-    await _edit(site, imported.kind, imported: imported);
-  }
-
   Future<void> _transferSite([SavedSiteRule? site]) async {
     if (_busy) return;
 
@@ -312,13 +270,6 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
         rule == null ? Icons.add_circle_outline : Icons.check_circle_outline,
       ),
       onTap: _busy ? null : () => _edit(site, kind),
-      trailing: rule == null
-          ? null
-          : IconButton(
-              tooltip: '$labelのJSON・QR',
-              onPressed: _busy ? null : () => _share(site, kind),
-              icon: const Icon(Icons.qr_code),
-            ),
     );
   }
 
@@ -489,11 +440,7 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
                 icon: const Icon(Icons.add),
                 label: const Text('新しいサイト'),
               ),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _import,
-                icon: const Icon(Icons.input),
-                label: const Text('単一の一覧JSONを取り込む'),
-              ),
+
               OutlinedButton.icon(
                 onPressed: _busy ? null : () => _transferSite(),
                 icon: const Icon(Icons.qr_code_scanner),

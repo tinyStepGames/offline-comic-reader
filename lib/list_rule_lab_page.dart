@@ -1,7 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import 'element_inspector_page.dart';
 import 'work_details_editor_page.dart';
@@ -309,7 +307,7 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
         _status =
             '「${saved.name}」の'
             '${_kind == 'works' ? '作品一覧' : 'チャプター一覧'}を保存しました。'
-            '読書機能への接続はまだ行っていません。';
+            '共有するときはサイト管理の「サイト一式のJSON・QR」を使用してください。';
       });
     } catch (error) {
       if (mounted) {
@@ -405,24 +403,6 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
           ? '設定を反映しました。テストしてください'
           : '設定を反映しました。対象HTMLを取得、またはページから選択してください';
     });
-  }
-
-  Future<void> _transfer() async {
-    if (_busy) return;
-    try {
-      final rule = _rule();
-      rule.validate();
-
-      final imported = await Navigator.of(context).push<ListExtractionRule>(
-        MaterialPageRoute<ListExtractionRule>(
-          builder: (_) => ListRuleTransferPage(rule: rule),
-        ),
-      );
-
-      if (mounted && imported != null) _apply(imported);
-    } catch (error) {
-      if (mounted) setState(() => _status = '共有画面を開けませんでした：$error');
-    }
   }
 
   Widget _fieldEditor(String key, String label) {
@@ -781,10 +761,6 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
                   onPressed: _busy ? null : _pickGroup,
                   child: const Text('まとまりをページから選ぶ'),
                 ),
-                OutlinedButton(
-                  onPressed: _busy ? null : _transfer,
-                  child: const Text('一覧JSON・QR'),
-                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -869,7 +845,8 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
             const SizedBox(height: 16),
             const Text(
               '下書きは端末内に1件保存します。復元は明示操作です。\n'
-              '「サイトに保存」で複数管理できます。読書機能への接続はまだ行いません。\n'
+              '「サイトに保存」で現在の一覧設定を保存します。\n'
+              '共有・取り込みはサイト管理の「サイト一式のJSON・QR」を使用してください。\n'
               '各項目の「まとまりから選ぶ」で内側を選択できます。セレクターの手入力も可能です。',
               style: TextStyle(color: Colors.white54, fontSize: 12),
             ),
@@ -878,142 +855,4 @@ class _ListRuleLabPageState extends State<ListRuleLabPage> {
       ),
     );
   }
-}
-
-class ListRuleTransferPage extends StatefulWidget {
-  const ListRuleTransferPage({super.key, required this.rule});
-  final ListExtractionRule rule;
-
-  @override
-  State<ListRuleTransferPage> createState() => _ListRuleTransferPageState();
-}
-
-class _ListRuleTransferPageState extends State<ListRuleTransferPage> {
-  late final TextEditingController _text;
-  String? _qr;
-  String _status = '一覧ルール専用形式です。HTMLやCookieは含めません。';
-
-  @override
-  void initState() {
-    super.initState();
-    _text = TextEditingController(text: widget.rule.encodeJson());
-  }
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  Future<void> _copy() async {
-    try {
-      final rule = ListExtractionRule.parse(_text.text);
-      await Clipboard.setData(ClipboardData(text: rule.encodeJson()));
-      if (mounted) setState(() => _status = 'JSONをコピーしました');
-    } catch (error) {
-      if (mounted) setState(() => _status = 'コピーできませんでした：$error');
-    }
-  }
-
-  void _makeQr() {
-    try {
-      final text = ListExtractionRule.parse(_text.text).encodeQr();
-      setState(() {
-        _qr = text;
-        _status = 'QRはスクリーンショットで共有できます';
-      });
-    } catch (error) {
-      setState(() {
-        _qr = null;
-        _status = 'QRを作れませんでした：$error';
-      });
-    }
-  }
-
-  Future<void> _import() async {
-    try {
-      final rule = ListExtractionRule.parse(_text.text);
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('一覧ルールを取り込む'),
-          content: SingleChildScrollView(
-            child: Text(
-              '${rule.pageUrl}\n\n'
-              'まとまり：${rule.groupSelector}\n'
-              '種類：${rule.kind}\n\n'
-              '編集内容を置き換えます。通信・下書き保存はまだ行いません。',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('キャンセル'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('取り込む'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed == true && mounted) Navigator.pop(context, rule);
-    } catch (error) {
-      if (mounted) setState(() => _status = '取り込めませんでした：$error');
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('一覧JSON・QR')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          '独自形式の一覧抽出ルールです。'
-          '単一抽出のQRや他アプリのルールとは別形式です。\n'
-          '共有前にURLへ個人用情報が入っていないか確認してください。',
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _text,
-          minLines: 8,
-          maxLines: 14,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: 'JSONまたはQRの内容文字列',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: (_) => setState(() => _qr = null),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OutlinedButton(onPressed: _copy, child: const Text('JSONコピー')),
-            OutlinedButton(onPressed: _makeQr, child: const Text('QR表示')),
-            FilledButton(onPressed: _import, child: const Text('確認して取り込む')),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SelectableText(_status),
-        if (_qr != null)
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 360),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: QrImageView(
-                  data: _qr!,
-                  version: QrVersions.auto,
-                  errorCorrectionLevel: QrErrorCorrectLevel.M,
-                  backgroundColor: Colors.white,
-                ),
-              ),
-            ),
-          ),
-      ],
-    ),
-  );
 }

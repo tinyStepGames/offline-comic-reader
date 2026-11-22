@@ -148,20 +148,51 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
   String _summary(SavedSiteRule site) {
     final works = site.rules['works'];
     final chapters = site.rules['chapters'];
+    final tags = site.tagNavigation;
+    final search = site.searchSettings;
+
+    String acquisitionLabel(String? value) {
+      if (value == null) return '未設定';
+      return value == 'renderedDom' ? '表示後HTML' : '通常HTML';
+    }
 
     final origins = {
       for (final rule in site.rules.values) Uri.parse(rule.pageUrl).origin,
       if (site.images != null) Uri.parse(site.images!.pageUrl).origin,
+      if (tags != null) Uri.parse(tags.rule.pageUrl).origin,
+      if (search != null) Uri.parse(search.template.url('sample')).origin,
+      for (final tab in site.browseTabs) Uri.parse(tab.pageUrl).origin,
     };
 
-    return 'サイト：${site.name}\n'
-        '作品一覧：${works == null ? '未設定' : 'あり'}\n'
-        'ページ送り：'
+    final tabNames = site.browseTabs.map((tab) => tab.title).join(' ／ ');
+
+    final searchRuleLabel = search == null
+        ? '未設定'
+        : search.rule != null
+        ? '検索専用'
+        : tags != null
+        ? 'タグ先を使用'
+        : '通常一覧を使用';
+
+    return 'サイト：${site.name}\n\n'
+        '作品一覧：${acquisitionLabel(works?.acquisition)}\n'
+        '通常一覧のページ送り：'
         '${works?.paginationUrl.isNotEmpty == true ? 'あり' : 'なし'}\n'
-        'チャプター一覧：${chapters == null ? '未設定' : 'あり'}\n'
+        'チャプター一覧：${acquisitionLabel(chapters?.acquisition)}\n'
         '作品詳細：'
-        '${chapters?.details.isNotEmpty == true ? 'あり' : 'なし'}\n'
-        '本文画像：${site.images == null ? '未設定' : 'あり'}\n\n'
+        '${chapters?.details.isNotEmpty == true ? 'あり' : '未設定'}\n'
+        '本文画像：${acquisitionLabel(site.images?.acquisition)}\n\n'
+        'タグ先一覧：${acquisitionLabel(tags?.rule.acquisition)}\n'
+        'タグURL変換：'
+        '${tags?.urlPattern.isNotEmpty == true ? 'あり' : 'なし'}\n'
+        '検索：${search == null ? '未設定' : 'あり'}\n'
+        '検索の抽出ルール：$searchRuleLabel\n'
+        'サイト別タブ：${site.browseTabs.length}件\n'
+        '${tabNames.isEmpty ? '' : '$tabNames\n'}\n'
+        '含めないもの：保存画像・お気に入り・履歴・'
+        '閲覧位置・開いたマーク・実行時キャッシュ・Cookie\n\n'
+        '注意：設定内のURLや整形テンプレートは共有されます。'
+        '秘密のトークンなどを書いている場合は共有前に確認してください。\n\n'
         '取得元：\n${origins.join('\n')}';
   }
 
