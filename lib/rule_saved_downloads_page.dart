@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'reader_page.dart';
@@ -5,6 +6,8 @@ import 'reading_progress.dart';
 import 'services/rule_downloads.dart';
 import 'services/saved_download_repository.dart';
 import 'services/site_rule_store.dart';
+import 'services/rule_library.dart';
+import 'services/rule_browse_client.dart';
 
 class RuleSavedDownloadsPage extends StatefulWidget {
   const RuleSavedDownloadsPage({super.key, required this.site});
@@ -56,8 +59,11 @@ class _RuleSavedDownloadsPageState extends State<RuleSavedDownloadsPage> {
 
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            _RuleLocalReaderPage(chapters: scan.chapters, initialIndex: index),
+        builder: (_) => _RuleLocalReaderPage(
+          site: widget.site,
+          chapters: scan.chapters,
+          initialIndex: index,
+        ),
       ),
     );
   }
@@ -197,10 +203,12 @@ class _RuleLocalReaderPage extends StatefulWidget {
   const _RuleLocalReaderPage({
     required this.chapters,
     required this.initialIndex,
+    required this.site,
   });
 
   final List<SavedChapter> chapters;
   final int initialIndex;
+  final SavedSiteRule site;
 
   @override
   State<_RuleLocalReaderPage> createState() => _RuleLocalReaderPageState();
@@ -213,6 +221,36 @@ class _RuleLocalReaderPageState extends State<_RuleLocalReaderPage> {
   void initState() {
     super.initState();
     _index = widget.initialIndex;
+  }
+
+  Future<void> _remember(SavedChapter item) async {
+    try {
+      final downloads = await RuleDownloads.open();
+      final title = await downloads.workTitle(item.chapter);
+
+      await rememberRuleLibrary(
+        store: downloads.store,
+        record: ruleLibraryWork(
+          site: widget.site,
+          workUrl: item.chapter.workId,
+          title: title,
+        ),
+        chapter: RuleBrowseItem(
+          title: item.chapter.title,
+          url: item.chapter.url,
+          thumbnail: null,
+          date: item.chapter.publishedDateText ?? '',
+          latestChapter: '',
+          issues: const [],
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('履歴を保存できませんでした：$error')));
+      }
+    }
   }
 
   void _moveChapter(int next) {
@@ -229,6 +267,9 @@ class _RuleLocalReaderPageState extends State<_RuleLocalReaderPage> {
       key: ValueKey(chapter.storageId),
       files: item.files,
       title: chapter.title,
+      onOpened: () {
+        unawaited(_remember(item));
+      },
       progressKey: ReadingKey(
         sourceId: chapter.progressSourceId,
         chapterId: chapter.progressChapterId,

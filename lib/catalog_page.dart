@@ -12,6 +12,8 @@ import 'chapter_order.dart';
 import 'favorite_updates_page.dart';
 import 'cover_widgets.dart';
 import 'library_widgets.dart';
+import 'rule_library_widgets.dart';
+import 'services/rule_library.dart';
 import 'services/user_library_store.dart';
 import 'package:flutter/material.dart';
 
@@ -301,6 +303,15 @@ class _SourceHomeState extends State<SourceHome> {
   }
 
   Future<void> _openFavorite(LibraryItem item) async {
+    if (isRuleLibrarySource(item.sourceId)) {
+      await openRuleLibraryItem(
+        context: context,
+        store: widget.store,
+        item: item,
+        history: false,
+      );
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ChapterListPage(
@@ -314,6 +325,15 @@ class _SourceHomeState extends State<SourceHome> {
   }
 
   Future<void> _openHistory(LibraryItem item) async {
+    if (isRuleLibrarySource(item.sourceId)) {
+      await openRuleLibraryItem(
+        context: context,
+        store: widget.store,
+        item: item,
+        history: true,
+      );
+      return;
+    }
     final chapter = item.chapter;
     if (chapter == null) return;
 
@@ -491,6 +511,7 @@ class _SourceHomeState extends State<SourceHome> {
                     library: UserLibraryStore.forRoot(widget.store.root),
                     sourceId: widget.adapter.id,
                     sourceName: widget.adapter.name,
+                    includeCustomSites: true,
                     history: false,
                     onOpen: _openFavorite,
                   ),
@@ -498,6 +519,7 @@ class _SourceHomeState extends State<SourceHome> {
                     library: UserLibraryStore.forRoot(widget.store.root),
                     sourceId: widget.adapter.id,
                     sourceName: widget.adapter.name,
+                    includeCustomSites: true,
                     history: true,
                     onOpen: _openHistory,
                   ),
