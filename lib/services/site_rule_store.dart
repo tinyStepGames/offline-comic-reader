@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 
 import 'list_extraction_rule.dart';
 import 'chapter_image_settings.dart';
+import 'site_reading_settings.dart';
 
 class SavedSiteRule {
   const SavedSiteRule({
@@ -20,6 +21,7 @@ class SavedSiteRule {
     this.tagNavigation,
     this.searchSettings,
     this.browseTabs = const [],
+    this.readingSettings,
   });
 
   final String id;
@@ -30,12 +32,17 @@ class SavedSiteRule {
   final TagNavigationSettings? tagNavigation;
   final SiteSearchSettings? searchSettings;
   final List<SiteBrowseTab> browseTabs;
+  final SiteReadingSettings? readingSettings;
+
+  SiteReadingMode get readingMode =>
+      readingSettings?.mode ?? SiteReadingMode.chapters;
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'rules': rules.map((key, rule) => MapEntry(key, rule.toJson())),
+    if (readingSettings != null) 'readingSettings': readingSettings!.toJson(),
     if (images != null) 'images': images!.toJson(),
     if (tagNavigation != null) 'tagNavigation': tagNavigation!.toJson(),
     if (searchSettings != null) 'searchSettings': searchSettings!.toJson(),
@@ -54,6 +61,7 @@ class SavedSiteRule {
         'tagNavigation',
         'searchSettings',
         'browseTabs',
+        'readingSettings',
       }.contains(key),
     )) {
       throw const FormatException('未対応のサイト保存項目です');
@@ -101,6 +109,13 @@ class SavedSiteRule {
     final browseTabs = SiteBrowseTab.parseList(data['browseTabs']);
     SiteBrowseTab.validateList(browseTabs, rules);
 
+    final readingSettings = data['readingSettings'] == null
+        ? null
+        : SiteReadingSettings.fromJson(
+            Map<String, dynamic>.from(data['readingSettings'] as Map),
+          );
+    readingSettings?.validateFor(rules.values);
+
     return SavedSiteRule(
       id: id,
       name: name,
@@ -110,6 +125,7 @@ class SavedSiteRule {
       tagNavigation: tagNavigation,
       searchSettings: searchSettings,
       browseTabs: browseTabs,
+      readingSettings: readingSettings,
     );
   }
 }
@@ -190,6 +206,7 @@ class SiteRuleStore {
     }
 
     for (final site in sites) {
+      site.readingSettings?.validateFor(site.rules.values);
       SiteBrowseTab.validateList(site.browseTabs, site.rules);
       site.searchSettings?.validateFor(site.rules);
       site.images?.validateOrigins(
@@ -261,6 +278,7 @@ class SiteRuleStore {
       tagNavigation: index >= 0 ? sites[index].tagNavigation : null,
       searchSettings: index >= 0 ? sites[index].searchSettings : null,
       browseTabs: index >= 0 ? sites[index].browseTabs : const [],
+      readingSettings: index >= 0 ? sites[index].readingSettings : null,
       name: checkedName,
       rules: Map.unmodifiable(rules),
       updatedAt: DateTime.now().toUtc(),
@@ -295,6 +313,7 @@ class SiteRuleStore {
       tagNavigation: old.tagNavigation,
       searchSettings: old.searchSettings,
       browseTabs: old.browseTabs,
+      readingSettings: old.readingSettings,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -317,6 +336,7 @@ class SiteRuleStore {
       tagNavigation: old.tagNavigation,
       searchSettings: old.searchSettings,
       browseTabs: old.browseTabs,
+      readingSettings: old.readingSettings,
       updatedAt: DateTime.now().toUtc(),
     );
     await _write(sites);
@@ -407,6 +427,7 @@ class SiteRuleStore {
       tagNavigation: checked,
       searchSettings: old.searchSettings,
       browseTabs: old.browseTabs,
+      readingSettings: old.readingSettings,
       updatedAt: DateTime.now().toUtc(),
     );
 
@@ -475,6 +496,42 @@ class SiteRuleStore {
       data.remove('browseTabs');
     } else {
       data['browseTabs'] = checked.map((tab) => tab.toJson()).toList();
+    }
+
+    data['updatedAt'] = DateTime.now().toUtc().toIso8601String();
+
+    final saved = SavedSiteRule.fromJson(data);
+    sites[index] = saved;
+
+    await _write(sites);
+    return saved;
+  });
+
+  /// 開き方だけを保存する。既存の一覧・本文画像等は保持する。
+  Future<SavedSiteRule> saveReadingSettings({
+    required String id,
+    required SiteReadingSettings? settings,
+    required DateTime expectedUpdatedAt,
+  }) => _locked(() async {
+    final sites = await _read();
+    final index = _requiredIndex(sites, id);
+    final old = sites[index];
+
+    if (old.updatedAt != expectedUpdatedAt.toUtc()) {
+      throw StateError('編集中にサイト設定が変更されました。画面を開き直してください');
+    }
+
+    final checked = settings == null
+        ? null
+        : SiteReadingSettings.fromJson(settings.toJson());
+    checked?.validateFor(old.rules.values);
+
+    final data = old.toJson();
+
+    if (checked == null) {
+      data.remove('readingSettings');
+    } else {
+      data['readingSettings'] = checked.toJson();
     }
 
     data['updatedAt'] = DateTime.now().toUtc().toIso8601String();

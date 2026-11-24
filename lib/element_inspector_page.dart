@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'services/html_probe.dart';
 import 'services/selector_check.dart';
+import 'inspector_dom_tree.dart';
+import 'inspector_tabs.dart';
 
 class VisualPick {
   const VisualPick({
@@ -34,6 +36,10 @@ const _pickerScript = r'''
   let sequence = 0;
   let snapshot = null;
   let marked = [];
+  let overlayHost = null;
+  let overlayRoot = null;
+  let overlayFrame = 0;
+  let overlayObserver = null;
   let scopeSelector = '';
   let fieldKey = '';
 
@@ -59,14 +65,138 @@ const _pickerScript = r'''
     return null;
   };
 
-  const restore = () => {
-    for (const item of marked) {
-      item.el.style.outline = item.outline;
-      item.el.style.outlineOffset = item.offset;
+  const overlayStyle = (el, values) => {
+    for (const [key, value] of Object.entries(values)) {
+      el.style.setProperty(key, value, 'important');
     }
-    marked = [];
   };
 
+  const ensureOverlay = () => {
+    if (overlayHost && overlayHost.isConnected) return;
+
+    overlayHost = document.createElement('ocr-picker-overlay');
+    overlayHost.setAttribute('data-ocr-picker-overlay', '');
+    overlayHost.setAttribute('aria-hidden', 'true');
+
+    overlayStyle(overlayHost, {
+      'all': 'initial',
+      'display': 'block',
+      'position': 'fixed',
+      'top': '0',
+      'left': '0',
+      'width': '100vw',
+      'height': '100vh',
+      'margin': '0',
+      'padding': '0',
+      'border': '0',
+      'background': 'transparent',
+      'pointer-events': 'none',
+      'z-index': '2147483647',
+      'overflow': 'hidden',
+      'contain': 'strict'
+    });
+
+    overlayRoot = overlayHost.attachShadow({mode: 'closed'});
+    document.documentElement.appendChild(overlayHost);
+  };
+
+  const paintOverlay = () => {
+    overlayFrame = 0;
+
+    const targets = marked.filter(el => el && el.isConnected);
+    if (!targets.length) {
+      if (overlayHost) overlayHost.remove();
+      overlayHost = null;
+      overlayRoot = null;
+      return;
+    }
+
+    ensureOverlay();
+
+    const fragment = document.createDocumentFragment();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    let painted = 0;
+
+    // 選択要素を最後に描き、ほかの一致箇所より見やすくする。
+    const ordered = [
+      ...targets.filter(el => el !== selected),
+      ...targets.filter(el => el === selected)
+    ];
+
+    for (const el of ordered) {
+      const active = el === selected;
+
+      for (const rect of [...el.getClientRects()].slice(0, 10)) {
+        if (painted >= 400) break;
+
+        const left = Math.max(0, rect.left);
+        const top = Math.max(0, rect.top);
+        const right = Math.min(viewportWidth, rect.right);
+        const bottom = Math.min(viewportHeight, rect.bottom);
+
+        if (right <= left || bottom <= top) continue;
+
+        const box = document.createElement('div');
+
+        overlayStyle(box, {
+          'position': 'absolute',
+          'box-sizing': 'border-box',
+          'left': left + 'px',
+          'top': top + 'px',
+          'width': (right - left) + 'px',
+          'height': (bottom - top) + 'px',
+          'margin': '0',
+          'padding': '0',
+          'pointer-events': 'none',
+          'background': active
+            ? 'rgba(0, 160, 255, 0.22)'
+            : 'rgba(0, 190, 255, 0.06)',
+          'border': active
+            ? '2px solid rgba(0, 175, 255, 0.98)'
+            : '1px solid rgba(0, 190, 255, 0.7)',
+          'box-shadow': active
+            ? '0 0 0 1px rgba(0, 0, 0, 0.6)'
+            : 'none',
+          'border-radius': '2px'
+        });
+
+        fragment.appendChild(box);
+        painted++;
+      }
+
+      if (painted >= 400) break;
+    }
+
+    overlayRoot.replaceChildren(fragment);
+  };
+
+  const scheduleOverlay = () => {
+    if (!marked.length || overlayFrame) return;
+    overlayFrame = requestAnimationFrame(paintOverlay);
+  };
+
+  window.addEventListener('scroll', scheduleOverlay, true);
+  window.addEventListener('resize', scheduleOverlay);
+  document.addEventListener('load', scheduleOverlay, true);
+
+  const restore = () => {
+    if (overlayFrame) {
+      cancelAnimationFrame(overlayFrame);
+      overlayFrame = 0;
+    }
+
+    if (overlayObserver) {
+      overlayObserver.disconnect();
+      overlayObserver = null;
+    }
+
+    if (overlayHost) overlayHost.remove();
+
+    overlayHost = null;
+    overlayRoot = null;
+    marked = [];
+  };
   const safeName = value => /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value);
 
   const quote = value =>
@@ -138,21 +268,184 @@ const _pickerScript = r'''
   };
   const highlight = selector => {
     restore();
-    let nodes;
-    try { nodes = scopedNodes(selector); }
-    catch (_) { return; }
 
-    for (const el of nodes.slice(0, 100)) {
-      marked.push({
-        el,
-        outline: el.style.outline,
-        offset: el.style.outlineOffset
-      });
-      el.style.outline = '3px solid #00c8ff';
-      el.style.outlineOffset = '-3px';
+    let nodes;
+    try {
+      nodes = scopedNodes(selector);
+    } catch (_) {
+      return;
+    }
+
+    marked = [...new Set(nodes)].slice(0, 100);
+
+    // 選択した本人は、候補が多数一致しても必ず表示対象に含める。
+    if (selected &&
+        selected.isConnected &&
+        (!scopeSelector || scopeOf(selected)) &&
+        !marked.includes(selected)) {
+      marked = [...marked.slice(0, 99), selected];
+    }
+
+    if (!marked.length) return;
+
+    paintOverlay();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      overlayObserver = new ResizeObserver(scheduleOverlay);
+      for (const el of marked) {
+        overlayObserver.observe(el);
+      }
     }
   };
+  const treeIds = new WeakMap();
+  const treeNodes = new Map();
+  let nextTreeId = 1;
 
+  const treeId = el => {
+    if (!el) return 0;
+    if (!treeIds.has(el)) {
+      if (nextTreeId > 20000) {
+        throw new Error('要素の管理上限です。必要ならページを開き直してください。');
+      }
+      const id = nextTreeId++;
+      treeIds.set(el, id);
+      treeNodes.set(id, el);
+    }
+    return treeIds.get(el);
+  };
+
+  const treeSnapshot = options => {
+    const expanded = new Set(
+      (options.expanded || [])
+        .filter(v => Number.isInteger(v) && v > 0)
+        .slice(0, 2000)
+    );
+    const limits = options.limits || {};
+    const selectedPath = new Set();
+
+    if (selected && selected.isConnected) {
+      for (let el = selected; el; el = el.parentElement) {
+        selectedPath.add(el);
+        if (options.reveal && el !== selected) {
+          expanded.add(treeId(el));
+        }
+      }
+    }
+
+    const rows = [];
+    let limited = false;
+    const maxRows = 1200;
+
+    const visit = (el, depth) => {
+      if (rows.length >= maxRows || depth > 80) {
+        limited = true;
+        return;
+      }
+
+      const id = treeId(el);
+      const attrs = {};
+      for (const attr of [...el.attributes].slice(0, 8)) {
+        attrs[attr.name.slice(0, 80)] = attr.value.slice(0, 160);
+      }
+
+      const isExpanded = expanded.has(id);
+      const children = [...el.children].filter(
+        node => node !== overlayHost
+      );
+      const childCount = children.length;
+      const ownText = /^(script|style)$/i.test(el.tagName)
+        ? ''
+        : [...el.childNodes]
+            .filter(node => node.nodeType === Node.TEXT_NODE)
+            .slice(0, 3)
+            .map(node => node.textContent || '')
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 100);
+
+      rows.push({
+        id,
+        depth,
+        tag: el.tagName.toLowerCase(),
+        attrs,
+        text: ownText,
+        childCount,
+        expanded: isExpanded,
+        selectable: !scopeSelector || !!scopeOf(el),
+        more: false,
+        remaining: 0,
+        canLoadMore: false
+      });
+
+      if (!isExpanded || !childCount) return;
+
+      const requested = Number(limits[String(id)] || 60);
+      const limit = Math.max(
+        60,
+        Math.min(600, Number.isFinite(requested) ? requested : 60)
+      );
+      const count = Math.min(childCount, limit);
+      let pinned = null;
+
+      for (let i = 0; i < childCount; i++) {
+        const child = children[i];
+        if (i < count) {
+          visit(child, depth + 1);
+        } else if (selectedPath.has(child)) {
+          pinned = child;
+          break;
+        } else if (i >= count && !selectedPath.has(el)) {
+          break;
+        }
+
+        if (rows.length >= maxRows) {
+          limited = true;
+          break;
+        }
+      }
+
+      if (childCount > count && rows.length < maxRows) {
+        rows.push({
+          id,
+          depth: depth + 1,
+          tag: '',
+          attrs: {},
+          text: '',
+          childCount: 0,
+          expanded: false,
+          selectable: false,
+          more: true,
+          remaining: childCount - count,
+          canLoadMore: limit < 600
+        });
+      }
+
+      if (pinned && rows.length < maxRows) {
+        visit(pinned, depth + 1);
+      }
+    };
+
+    if (document.documentElement) {
+      visit(document.documentElement, 0);
+    }
+
+    return {
+      rows,
+      selectedId: selected && selected.isConnected ? treeId(selected) : 0,
+      expanded: [...expanded],
+      limited
+    };
+  };
+
+  const selectTree = id => {
+    const el = treeNodes.get(id);
+    if (!el || !el.isConnected) return false;
+    if (scopeSelector && !scopeOf(el)) return false;
+    describe(el);
+    el.scrollIntoView({block: 'center', inline: 'nearest'});
+    return true;
+  };
   const describe = el => {
     const root = scopeSelector ? scopeOf(el) : null;
     if (scopeSelector && !root) return;
@@ -225,6 +518,8 @@ const _pickerScript = r'''
   }, true);
 
   window.__ocrPicker = {
+    tree: treeSnapshot,
+    selectTree,
     configureScope(selector, key) {
       restore();
       scopeSelector = selector || '';
@@ -290,6 +585,7 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
   bool _polling = false;
   bool _capturing = false;
   int _sequence = -1;
+  int _treeDocument = 0;
   Map<String, dynamic>? _selected;
   String _selector = '';
   String _value = 'text';
@@ -333,8 +629,12 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
   Future<dynamic> _eval(String source) async =>
       _controller?.evaluateJavascript(source: source);
 
-  Future<void> _poll() async {
-    if (!mounted || !_ready || !_selecting || _polling || _capturing) {
+  Future<void> _poll({bool force = false}) async {
+    if (!mounted ||
+        !_ready ||
+        (!_selecting && !force) ||
+        _polling ||
+        _capturing) {
       return;
     }
 
@@ -413,6 +713,49 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
     } finally {
       _polling = false;
     }
+  }
+
+  Future<InspectorTreeSnapshot> _readTree(
+    Set<int> expanded,
+    Map<int, int> limits,
+    bool reveal,
+  ) async {
+    if (!_ready || _capturing) {
+      throw StateError('ページの準備が完了するまでお待ちください。');
+    }
+
+    final request = jsonEncode({
+      'expanded': expanded.toList(),
+      'limits': {
+        for (final entry in limits.entries) entry.key.toString(): entry.value,
+      },
+      'reveal': reveal,
+    });
+
+    final raw = await _eval(
+      'JSON.stringify(window.__ocrPicker.tree($request))',
+    );
+
+    if (raw is! String || raw.length > 2 * 1024 * 1024) {
+      throw const FormatException('要素ツリーのデータ量が上限を超えました。');
+    }
+
+    return InspectorTreeSnapshot.fromJson(jsonDecode(raw));
+  }
+
+  Future<bool> _selectTree(int id) async {
+    if (!_ready || _capturing) return false;
+
+    await _eval('window.__ocrPicker.enable(true)');
+    if (!mounted) return false;
+
+    setState(() => _selecting = true);
+
+    final result = await _eval('window.__ocrPicker.selectTree($id)');
+    if (result != true) return false;
+
+    await _poll(force: true);
+    return true;
   }
 
   Future<void> _toggle() async {
@@ -664,106 +1007,133 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
               .toList();
 
     return ListView(
-      padding: const EdgeInsets.all(12),
+      key: const PageStorageKey('inspector-selection-details'),
+      padding: const EdgeInsets.all(16),
       children: [
-        Text(_status),
-        const SizedBox(height: 8),
+        if (_status.isNotEmpty) Text(_status),
         if (selected == null)
           const Text(
-            '上のページの表紙・タイトル・画像などを選んでください。\n'
-            'iframe内やShadow DOM内の選択には、この初版は対応しません。',
+            '「ページ」タブで要素をクリックするか、'
+            '「要素ツリー」タブから要素を選んでください。\n\n'
+            'iframe・Shadow DOMの内部は今回の対象外です。',
           ),
         if (selected != null) ...[
+          Text(
+            '選択中：<${selected['tag']}>',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
+            runSpacing: 8,
             children: [
               OutlinedButton(
-                onPressed: _ready ? () => _move('parent') : null,
+                onPressed: _ready && !_capturing ? () => _move('parent') : null,
                 child: const Text('親要素へ'),
               ),
               OutlinedButton(
-                onPressed: _ready ? () => _move('child') : null,
-                child: const Text('子要素へ'),
+                onPressed: _ready && !_capturing ? () => _move('child') : null,
+                child: const Text('先頭の子要素へ'),
               ),
             ],
           ),
-          const Text('セレクター候補（押すと一致箇所を強調）'),
+          const SizedBox(height: 16),
+          const Text('セレクター候補'),
           for (final candidate in candidates)
-            RadioListTile<String>(
+            ListTile(
               contentPadding: EdgeInsets.zero,
+              selected: _selector == candidate['selector'],
+              leading: Icon(
+                _selector == candidate['selector']
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+              ),
               title: Text(
                 (candidate['selector'] as String).isEmpty
-                    ? '要素自身（まとまりそのもの）'
+                    ? 'まとまり自体'
                     : candidate['selector'] as String,
+                style: const TextStyle(fontFamily: 'monospace'),
               ),
-              subtitle: Text(
-                '${candidate['count']}件に一致'
-                '${(candidate['selector'] as String).contains(':first-child') ? '／位置依存のため変更に弱い候補' : ''}',
-              ),
-              value: candidate['selector'] as String,
-              groupValue: _selector,
-              onChanged: !_ready
+              subtitle: Text('表示DOMで${candidate['count']}件一致'),
+              onTap: !_ready || _capturing
                   ? null
-                  : (value) async {
-                      if (value == null) return;
+                  : () async {
+                      final value = candidate['selector'] as String;
                       setState(() => _selector = value);
                       try {
                         await _eval(
-                          'window.__ocrPicker?.highlight(${jsonEncode(value)})',
+                          'window.__ocrPicker.highlight(${jsonEncode(value)})',
                         );
                       } catch (error) {
                         if (mounted) {
-                          setState(() => _status = '強調できませんでした：$error');
+                          setState(() => _status = '$error');
                         }
                       }
                     },
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             key: ValueKey('$_sequence:$_value'),
             initialValue: _value,
             isExpanded: true,
             decoration: const InputDecoration(
-              labelText: 'この要素から取得する値',
+              labelText: '取得する内容',
               border: OutlineInputBorder(),
             ),
             items: const [
-              DropdownMenuItem(value: 'text', child: Text('文字列')),
-              DropdownMenuItem(value: 'innerHtml', child: Text('内側のHTML')),
-              DropdownMenuItem(value: 'href', child: Text('href：リンク')),
-              DropdownMenuItem(value: 'src', child: Text('src：画像等')),
-              DropdownMenuItem(value: 'data-src', child: Text('data-src')),
-              DropdownMenuItem(value: 'style', child: Text('style：背景画像など')),
-              DropdownMenuItem(value: 'id', child: Text('id')),
+              DropdownMenuItem(value: 'text', child: Text('テキスト')),
+              DropdownMenuItem(value: 'innerHtml', child: Text('内部HTML')),
+              DropdownMenuItem(value: 'href', child: Text('リンク：href')),
+              DropdownMenuItem(value: 'src', child: Text('画像：src')),
+              DropdownMenuItem(value: 'data-src', child: Text('画像：data-src')),
+              DropdownMenuItem(value: 'style', child: Text('style属性')),
+              DropdownMenuItem(value: 'id', child: Text('id属性')),
             ],
-            onChanged: (value) {
-              if (value != null) setState(() => _value = value);
-            },
+            onChanged: _capturing
+                ? null
+                : (value) {
+                    if (value != null) setState(() => _value = value);
+                  },
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           FilledButton(
             onPressed: _ready && !_capturing ? _use : null,
-            child: Text(_capturing ? '確認中…' : '確認してこの設定を使う'),
+            child: Text(_capturing ? '抽出を確認中…' : '抽出を確認して使う'),
           ),
-          const SizedBox(height: 12),
-          const Text('文字列プレビュー'),
+          const SizedBox(height: 8),
+          const Text(
+            '表示DOMの一致件数と、実際のHTML抽出結果は異なる場合があります。'
+            '反映前に従来の抽出確認を行います。',
+          ),
+          const Divider(height: 32),
+          const Text('テキスト'),
           SelectableText(selected['text'] as String? ?? ''),
-          const SizedBox(height: 12),
-          if (widget.fieldKey == 'thumbnail' && _value == 'style')
-            const Padding(
-              padding: EdgeInsets.only(bottom: 12),
-              child: Text(
-                '表紙に反映すると、style 内の最初の url(...) を取得します。',
-                style: TextStyle(color: Colors.tealAccent),
+          const SizedBox(height: 16),
+          const Text('主な属性'),
+          for (final entry in attrs.entries)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: SelectableText(
+                '${entry.key} = ${entry.value}',
+                style: const TextStyle(fontFamily: 'monospace'),
               ),
             ),
-          const Text('主な属性'),
-          SelectableText(const JsonEncoder.withIndent('  ').convert(attrs)),
-          const SizedBox(height: 12),
-          const Text('選択部分のHTML（先頭6000文字まで）'),
-          SelectableText(
-            selected['html'] as String? ?? '',
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          if (widget.fieldKey == 'thumbnail' && _value == 'style')
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('背景画像はstyle内のurl(...)を確認してください。'),
+            ),
+          const SizedBox(height: 16),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text('選択要素のHTMLを見る'),
+            subtitle: const Text('先頭6000文字まで'),
+            children: [
+              SelectableText(
+                selected['html'] as String? ?? '',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ],
           ),
         ],
       ],
@@ -773,7 +1143,7 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('ページから要素を選ぶ'),
+      title: const Text('要素を調べる・選ぶ'),
       actions: [
         IconButton(
           tooltip: _selecting ? '通常操作に切り替え' : '要素選択に切り替え',
@@ -843,6 +1213,7 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
                     if (!mounted) return;
                     setState(() {
                       _ready = false;
+                      _treeDocument++;
                       _selected = null;
                       _sequence = -1;
                       _selector = '';
@@ -896,30 +1267,22 @@ class _ElementInspectorPageState extends State<ElementInspectorPage> {
                   },
                 );
 
-                if (constraints.maxWidth >= 900) {
-                  return Row(
-                    children: [
-                      Expanded(flex: 3, child: browser),
-                      const VerticalDivider(width: 1),
-                      Expanded(flex: 2, child: _details()),
-                    ],
-                  );
-                }
-
-                return Column(
-                  children: [
-                    Expanded(flex: 3, child: browser),
-                    Container(
-                      height: 24,
-                      alignment: Alignment.center,
-                      color: Colors.white10,
-                      child: const Text(
-                        '下側：選択した要素の情報',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                    ),
-                    Expanded(flex: 2, child: _details()),
-                  ],
+                return InspectorTabs(
+                  browser: browser,
+                  tree: _ready
+                      ? InspectorDomTree(
+                          key: ValueKey('tree-document-$_treeDocument'),
+                          revision: _sequence,
+                          onRead: _readTree,
+                          onSelect: _selectTree,
+                        )
+                      : const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text('ページの読み込み完了後にツリーを表示します。'),
+                          ),
+                        ),
+                  details: _details(),
                 );
               },
             ),

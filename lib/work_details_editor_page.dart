@@ -22,10 +22,12 @@ class WorkDetailsEditorPage extends StatefulWidget {
     super.key,
     required this.rule,
     required this.page,
+    this.chapterless = false,
   });
 
   final ListExtractionRule rule;
   final HtmlProbePage? page;
+  final bool chapterless;
 
   @override
   State<WorkDetailsEditorPage> createState() => _WorkDetailsEditorPageState();
@@ -333,7 +335,7 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage>
         backgroundColor: Colors.black,
         appBar: AppBar(
           leading: editorBackButton,
-          title: const Text('作品詳細・並び替え'),
+          title: Text(widget.chapterless ? '作品詳細の設定' : '作品詳細・並び替え'),
         ),
         body: SafeArea(
           child: ListView(
@@ -358,7 +360,8 @@ class _WorkDetailsEditorPageState extends State<WorkDetailsEditorPage>
               ),
               const SizedBox(height: 12),
               for (final entry in workDetailLabels.entries)
-                _editor(entry.key, entry.value),
+                if (!widget.chapterless || entry.key != 'chapterNumber')
+                  _editor(entry.key, entry.value),
               const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: _busy ? null : _test,

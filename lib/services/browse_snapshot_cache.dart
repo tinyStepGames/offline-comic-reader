@@ -40,6 +40,7 @@ String browseSnapshotKey({
   'targetUrl': targetUrl,
   'rule': site.rules[kind]?.toJson(),
   'chapterOriginSample': site.rules['chapters']?.pageUrl,
+  'readingSettings': site.readingSettings?.toJson(),
 });
 
 class BrowseSnapshotCache {

@@ -29,12 +29,16 @@ class SiteRuleBundle {
 
   Map<String, dynamic> toJson() => {
     'format': format,
-    'version': site.browseTabs.isNotEmpty
+    'version': site.readingSettings != null
+        ? 5
+        : site.browseTabs.isNotEmpty
         ? 4
         : (site.searchSettings != null
               ? 3
               : (site.tagNavigation == null ? 1 : 2)),
     'name': site.name,
+    if (site.readingSettings != null)
+      'readingSettings': site.readingSettings!.toJson(),
     if (site.browseTabs.isNotEmpty)
       'browseTabs': site.browseTabs.map((tab) => tab.toJson()).toList(),
     if (site.searchSettings != null)
@@ -114,7 +118,7 @@ class SiteRuleBundle {
       final data = Map<String, dynamic>.from(value);
 
       if (data['format'] != format ||
-          !const [1, 2, 3, 4].contains(data['version']) ||
+          !const [1, 2, 3, 4, 5].contains(data['version']) ||
           data.keys.any(
             (key) => !const {
               'format',
@@ -125,23 +129,29 @@ class SiteRuleBundle {
               'tagNavigation',
               'searchSettings',
               'browseTabs',
+              'readingSettings',
             }.contains(key),
           )) {
         throw const FormatException('未対応のサイト一式形式です');
       }
 
       if (data.containsKey('tagNavigation') &&
-          !const [2, 3, 4].contains(data['version'])) {
+          !const [2, 3, 4, 5].contains(data['version'])) {
         throw const FormatException('タグ先設定を含む共有JSONにはバージョン2が必要です');
       }
 
       if (data.containsKey('searchSettings') &&
-          !const [3, 4].contains(data['version'])) {
+          !const [3, 4, 5].contains(data['version'])) {
         throw const FormatException('検索設定を含む共有JSONにはバージョン3が必要です');
       }
 
-      if (data.containsKey('browseTabs') && data['version'] != 4) {
+      if (data.containsKey('browseTabs') &&
+          !const [4, 5].contains(data['version'])) {
         throw const FormatException('タブ設定を含む共有JSONにはバージョン4が必要です');
+      }
+
+      if (data.containsKey('readingSettings') && data['version'] != 5) {
+        throw const FormatException('開き方設定を含む共有JSONにはバージョン5が必要です');
       }
 
       // 共有元のIDと保存日時は移植しない。
@@ -151,6 +161,8 @@ class SiteRuleBundle {
         'name': data['name'],
         'updatedAt': '2000-01-01T00:00:00.000Z',
         'rules': data['rules'],
+        if (data.containsKey('readingSettings'))
+          'readingSettings': data['readingSettings'],
         if (data.containsKey('browseTabs')) 'browseTabs': data['browseTabs'],
         if (data.containsKey('searchSettings'))
           'searchSettings': data['searchSettings'],
@@ -226,6 +238,7 @@ Future<RuleBrowseResult> checkSiteBundleStatic(
     tagNavigation: site.tagNavigation,
     searchSettings: site.searchSettings,
     browseTabs: site.browseTabs,
+    readingSettings: site.readingSettings,
   );
 
   final client = RuleBrowseClient(fetcher: fetcher);

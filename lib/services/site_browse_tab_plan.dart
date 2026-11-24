@@ -37,5 +37,6 @@ SavedSiteRule makeSiteBrowseTabPlan(SavedSiteRule site, SiteBrowseTab tab) {
     tagNavigation: site.tagNavigation,
     searchSettings: site.searchSettings,
     browseTabs: site.browseTabs,
+    readingSettings: site.readingSettings,
   );
 }

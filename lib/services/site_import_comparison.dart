@@ -47,6 +47,7 @@ Map<String, Object?> _sections(SavedSiteRule site) {
 
   return {
     'name': site.name,
+    'reading': site.readingSettings?.toJson(),
     'works': works?.toJson(),
     'pagination': works == null || works.paginationUrl.isEmpty
         ? null
@@ -73,6 +74,7 @@ Map<String, Object?> _sections(SavedSiteRule site) {
 
 const _labels = <String, String>{
   'name': 'サイト名',
+  'reading': '開き方・チャプターなし作品詳細',
   'works': '作品一覧',
   'pagination': '通常一覧のページ送り',
   'chapters': 'チャプター一覧',

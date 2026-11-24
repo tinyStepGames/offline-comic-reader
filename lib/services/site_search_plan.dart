@@ -37,5 +37,6 @@ SavedSiteRule makeSiteSearchPlan(SavedSiteRule site, String keyword) {
     tagNavigation: site.tagNavigation,
     searchSettings: settings,
     browseTabs: site.browseTabs,
+    readingSettings: site.readingSettings,
   );
 }

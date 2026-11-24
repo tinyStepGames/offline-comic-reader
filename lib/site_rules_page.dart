@@ -13,6 +13,8 @@ import 'chapter_image_lab_page.dart';
 import 'services/download_store.dart';
 import 'services/list_extraction_rule.dart';
 import 'services/site_rule_store.dart';
+import 'services/site_reading_settings.dart';
+import 'site_reading_editor_page.dart';
 
 class SiteRulesPage extends StatefulWidget {
   const SiteRulesPage({super.key, required this.store, this.initialSiteId});
@@ -154,6 +156,19 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
       MaterialPageRoute<void>(
         builder: (_) =>
             TagNavigationEditorPage(store: widget.store, site: site),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _editReading(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            SiteReadingEditorPage(repository: _repository, site: site),
       ),
     );
 
@@ -384,7 +399,14 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
             ),
             onTap: _busy ? null : () => _editTagNavigation(site),
           ),
-          _slot(site, 'chapters', 'チャプター一覧'),
+          ListTile(
+            leading: const Icon(Icons.alt_route),
+            title: const Text('一覧からの開き方'),
+            subtitle: Text(site.readingMode.label),
+            onTap: _busy ? null : () => _editReading(site),
+          ),
+          if (site.readingMode == SiteReadingMode.chapters)
+            _slot(site, 'chapters', 'チャプター一覧'),
           ListTile(
             title: const Text('本文画像'),
             subtitle: Text(

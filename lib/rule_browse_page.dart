@@ -22,6 +22,8 @@ import 'services/work_page_details.dart';
 import 'services/chapter_reading_order.dart';
 import 'work_details_panel.dart';
 import 'rule_online_reader_page.dart';
+import 'chapterless_work_page.dart';
+import 'services/site_reading_settings.dart';
 import 'rule_download_button.dart';
 import 'rule_batch_download_panel.dart';
 import 'rule_saved_downloads_page.dart';
@@ -701,6 +703,36 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           ],
         ),
       );
+      return;
+    }
+
+    final readingSite = widget.navigationSite ?? widget.site;
+
+    if (_isWorks && readingSite.readingMode != SiteReadingMode.chapters) {
+      _openingItem = true;
+
+      try {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => readingSite.readingMode == SiteReadingMode.direct
+                ? ChapterlessReaderPage(
+                    site: readingSite,
+                    item: item,
+                    workUrl: url,
+                  )
+                : ChapterlessDetailsPage(site: readingSite, item: item),
+          ),
+        );
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('作品を開けませんでした：$error')));
+        }
+      } finally {
+        _openingItem = false;
+      }
+
       return;
     }
 

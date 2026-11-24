@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'html_probe.dart';
 import 'list_extraction_rule.dart';
 import 'site_rule_store.dart';
+import 'site_reading_settings.dart';
 import 'work_page_details.dart';
 import 'page_url_template.dart';
 
@@ -184,7 +185,10 @@ class RuleBrowseClient {
     }
     _checkCancelled(cancelToken);
 
-    final nextTemplate = kind == 'works' ? site.rules['chapters'] : null;
+    final nextTemplate =
+        kind == 'works' && site.readingMode == SiteReadingMode.chapters
+        ? site.rules['chapters']
+        : null;
     final linkOrigin = nextTemplate == null
         ? finalUri.origin
         : htmlProbeUri(nextTemplate.pageUrl).origin;
