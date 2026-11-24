@@ -1,3 +1,4 @@
+import 'saved_videos_page.dart';
 import 'incomplete_downloads_page.dart';
 import 'package:flutter/material.dart';
 
@@ -300,6 +301,20 @@ class _SavedDownloadsPaneState extends State<SavedDownloadsPane> {
                   ),
                 ),
               ),
+            ),
+            IconButton(
+              tooltip: '保存済み動画',
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => SavedVideosPage(store: widget.store),
+                        ),
+                      );
+                      if (mounted) await _refresh();
+                    },
+              icon: const Icon(Icons.video_library_outlined),
             ),
             IconButton(
               tooltip: '未完了ダウンロード',

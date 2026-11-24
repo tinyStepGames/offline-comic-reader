@@ -1,3 +1,4 @@
+import 'rule_video_support.dart';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -37,6 +38,7 @@ class RuleContentClient {
   }) async {
     _checkCancel(cancelToken);
 
+    requireRuleImageDownload(site);
     final settings = site.images;
     if (settings == null) {
       throw const FormatException('本文画像ルールが未設定です。サイトルール管理から設定してください');

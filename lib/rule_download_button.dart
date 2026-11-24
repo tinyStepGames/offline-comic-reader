@@ -1,3 +1,4 @@
+import 'services/rule_video_support.dart';
 import 'package:flutter/material.dart';
 
 import 'services/rule_browse_client.dart';
@@ -37,6 +38,7 @@ class _RuleDownloadButtonState extends State<RuleDownloadButton> {
   }
 
   Future<void> _attach() async {
+    if (usesRuleVideo(widget.site)) return;
     try {
       final downloads = await RuleDownloads.open();
       if (!mounted) return;
@@ -112,6 +114,7 @@ class _RuleDownloadButtonState extends State<RuleDownloadButton> {
 
   @override
   Widget build(BuildContext context) {
+    if (usesRuleVideo(widget.site)) return const SizedBox.shrink();
     final downloads = _downloads;
     final current = downloads?.state.value;
     final mine = current?.chapterId == widget.chapter.storageId;

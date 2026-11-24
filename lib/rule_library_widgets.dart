@@ -1,3 +1,4 @@
+import 'services/rule_video_support.dart';
 import 'package:flutter/material.dart';
 
 import 'chapter_reader_page.dart';
@@ -192,7 +193,7 @@ Future<void> openRuleLibraryItem({
 
   // 直接読む方式、またはサイト設定が削除済みの場合。
   // 保存画像があれば、ネットワーク取得なしで本文を開く。
-  if (selected != null) {
+  if (selected != null && (site == null || !usesRuleVideo(site))) {
     final local = await store.load(selected);
 
     if (!context.mounted) return;
