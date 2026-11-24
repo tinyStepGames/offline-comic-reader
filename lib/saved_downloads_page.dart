@@ -8,6 +8,7 @@ import 'services/chapter_read_state_store.dart';
 import 'services/download_store.dart';
 import 'services/saved_download_repository.dart';
 import 'services/user_library_store.dart';
+import 'services/rule_library.dart';
 import 'sources/source_adapter.dart';
 
 Widget _localPreview(SavedChapter item, double width, double height) {
@@ -37,7 +38,10 @@ class _SavedGroup {
     required this.work,
     required this.tab,
     required this.items,
+    this.adapter,
   });
+
+  final SourceAdapter? adapter;
 
   final String key;
   final ComicWork? work;
@@ -191,6 +195,21 @@ class _SavedDownloadsPaneState extends State<SavedDownloadsPane> {
         );
       }
 
+      final custom = await loadRuleLibrarySaved(widget.store);
+      warnings.addAll(custom.issues);
+
+      for (final group in custom.groups) {
+        groups.add(
+          _SavedGroup(
+            key: group.key,
+            work: group.record.work,
+            tab: group.record.tab,
+            items: group.items,
+            adapter: RuleLibraryOfflineAdapter(group.record.sourceId),
+          ),
+        );
+      }
+
       groups.sort((a, b) {
         final title = a.title.compareTo(b.title);
         return title != 0 ? title : a.tab.title.compareTo(b.tab.title);
@@ -202,8 +221,8 @@ class _SavedDownloadsPaneState extends State<SavedDownloadsPane> {
         _groups = groups;
         _issues = warnings;
         _status =
-            '${groups.length}作品・${result.chapters.length}話'
-            '・${savedSizeLabel(result.bytes)}\n'
+            '${groups.length}作品・${groups.fold<int>(0, (sum, group) => sum + group.items.length)}話'
+            '・${savedSizeLabel(groups.fold<int>(0, (sum, group) => sum + group.bytes))}\n'
             '現在のサイトの保存完了データ'
             '${warnings.isEmpty ? '' : '・確認事項${warnings.length}件'}';
       });
@@ -222,7 +241,7 @@ class _SavedDownloadsPaneState extends State<SavedDownloadsPane> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => _SavedChaptersPage(
-          adapter: widget.adapter,
+          adapter: group.adapter ?? widget.adapter,
           store: widget.store,
           group: group,
         ),

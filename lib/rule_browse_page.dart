@@ -22,6 +22,7 @@ import 'services/work_page_details.dart';
 import 'services/chapter_reading_order.dart';
 import 'work_details_panel.dart';
 import 'rule_online_reader_page.dart';
+import 'rule_library_widgets.dart';
 import 'chapterless_work_page.dart';
 import 'services/site_reading_settings.dart';
 import 'rule_download_button.dart';
@@ -37,6 +38,7 @@ class RuleBrowsePage extends StatefulWidget {
     this.targetUrl,
     this.workTitle,
     this.workThumbnail,
+    this.resumeChapter,
     this.listTitle,
     this.pagingNotice,
     this.navigationSite,
@@ -50,6 +52,7 @@ class RuleBrowsePage extends StatefulWidget {
   final String? targetUrl;
   final String? workTitle;
   final Uri? workThumbnail;
+  final RuleBrowseItem? resumeChapter;
   final String? listTitle;
   final String? pagingNotice;
 
@@ -383,13 +386,41 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         );
 
   Widget _workSection() {
-    final details = _result!.workDetails;
+    final details = _result?.workDetails ?? const WorkPageDetails();
+    final resume = widget.resumeChapter;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (widget.targetUrl != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: RuleLibraryFavoriteButton(
+                site: widget.navigationSite ?? widget.site,
+                workUrl: widget.targetUrl!,
+                title: details.title.isNotEmpty
+                    ? details.title
+                    : widget.workTitle ?? widget.targetUrl!,
+                thumbnail: details.thumbnail ?? widget.workThumbnail,
+              ),
+            ),
+          if (resume != null) ...[
+            FilledButton.icon(
+              key: const ValueKey('rule-history-resume'),
+              onPressed: _busy || _openingItem || widget.site.images == null
+                  ? null
+                  : _resumeHistory,
+              icon: const Icon(Icons.play_arrow),
+              label: Text(
+                '続きを読む：${resume.title}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           WorkDetailsPanel(
             details: details,
             fallbackTitle: widget.workTitle ?? '',
@@ -404,7 +435,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
               workTitle: details.title.isNotEmpty
                   ? details.title
                   : widget.workTitle ?? '',
-              items: _result!.items,
+              items: _result?.items ?? const <RuleBrowseItem>[],
             ),
           ],
           const SizedBox(height: 16),
@@ -472,6 +503,72 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         ).showSnackBar(SnackBar(content: Text('タグ一覧を開けませんでした：$error')));
       }
     } finally {
+      _openingItem = false;
+    }
+  }
+
+  Future<void> _resumeHistory() async {
+    final resume = widget.resumeChapter;
+    final workUrl = widget.targetUrl;
+
+    if (_busy ||
+        _openingItem ||
+        resume?.url == null ||
+        workUrl == null ||
+        widget.site.images == null) {
+      return;
+    }
+
+    _openingItem = true;
+
+    try {
+      final seen = <String>{};
+
+      var chapters =
+          chapterReadingOrder<RuleBrowseItem>(
+            _result?.items ?? const <RuleBrowseItem>[],
+            titleOf: (chapter) => chapter.title,
+            explicitNumberOf: (chapter) => chapter.chapterNumber,
+          ).where((chapter) {
+            final url = chapter.url;
+            return url != null && seen.add(url.removeFragment().toString());
+          }).toList();
+
+      var index = chapters.indexWhere(
+        (chapter) =>
+            chapter.url!.removeFragment() == resume!.url!.removeFragment(),
+      );
+
+      // 現在の一覧にない場合も、履歴に記録されたURLだけを使用する。
+      // サンプルURLや別の話で代用しない。
+      if (index < 0) {
+        chapters = [resume!];
+        index = 0;
+      }
+
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => RuleOnlineReaderPage(
+            site: widget.navigationSite ?? widget.site,
+            chapters: List.unmodifiable(chapters),
+            initialIndex: index,
+            workUrl: workUrl,
+            workTitle: _result?.workDetails.title.isNotEmpty == true
+                ? _result!.workDetails.title
+                : widget.workTitle,
+            workThumbnail:
+                _result?.workDetails.thumbnail ?? widget.workThumbnail,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('続きを読むを開けませんでした：$error')));
+      }
+    } finally {
+      await _restoreOpenedChapters();
       _openingItem = false;
     }
   }
@@ -811,7 +908,12 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
               site: widget.site,
               chapters: List.unmodifiable(chapters),
               initialIndex: selectedIndex,
-              workThumbnail: widget.workThumbnail,
+              workUrl: widget.targetUrl,
+              workTitle: _result?.workDetails.title.isNotEmpty == true
+                  ? _result!.workDetails.title
+                  : widget.workTitle,
+              workThumbnail:
+                  _result?.workDetails.thumbnail ?? widget.workThumbnail,
             ),
           ),
         );
@@ -1057,7 +1159,8 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   sliver: SliverToBoxAdapter(child: _header()),
                 ),
-                if (!_isWorks && _result != null)
+                if (!_isWorks &&
+                    (_result != null || widget.resumeChapter != null))
                   SliverToBoxAdapter(child: _workSection()),
                 if (_isWorks && _collection)
                   SliverPadding(

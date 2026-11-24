@@ -3,6 +3,7 @@ import 'reading_progress.dart';
 import 'package:flutter/material.dart';
 
 import 'services/user_library_store.dart';
+import 'services/rule_library.dart';
 import 'sources/source_adapter.dart';
 
 class FavoriteWorkButton extends StatefulWidget {
@@ -102,11 +103,13 @@ class LibraryShelf extends StatefulWidget {
     required this.history,
     required this.onOpen,
     this.sourceName,
+    this.includeCustomSites = false,
   });
 
   final UserLibraryStore library;
   final String sourceId;
   final String? sourceName;
+  final bool includeCustomSites;
   final bool history;
   final Future<void> Function(LibraryItem item) onOpen;
 
@@ -191,12 +194,26 @@ class _LibraryShelfState extends State<LibraryShelf> {
   Future<void> _clear() async {
     final confirmed = await _confirm(
       '閲覧履歴を消去',
-      'このサイトの履歴を消去しますか？\n'
-          '保存画像・お気に入り・閲覧位置は残ります。',
+      widget.includeCustomSites
+          ? '表示対象のサイトの履歴を消去しますか？\n'
+                '保存画像・お気に入り・閲覧位置は残ります。'
+          : 'このサイトの履歴を消去しますか？\n'
+                '保存画像・お気に入り・閲覧位置は残ります。',
     );
 
     if (confirmed && mounted) {
-      await _run(() => widget.library.clearHistory(widget.sourceId));
+      await _run(() async {
+        final sources = <String>{
+          widget.sourceId,
+          if (widget.includeCustomSites)
+            for (final item in widget.library.history)
+              if (isRuleLibrarySource(item.sourceId)) item.sourceId,
+        };
+
+        for (final sourceId in sources) {
+          await widget.library.clearHistory(sourceId);
+        }
+      });
     }
   }
 
@@ -271,7 +288,7 @@ class _LibraryShelfState extends State<LibraryShelf> {
                           children: [
                             Expanded(
                               child: Text(
-                                '${widget.sourceName ?? item.sourceId}'
+                                '${isRuleLibrarySource(item.sourceId) ? "作成サイト" : widget.sourceName ?? item.sourceId}'
                                 '・${item.tab.title}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -330,7 +347,12 @@ class _LibraryShelfState extends State<LibraryShelf> {
                 (widget.history
                         ? widget.library.history
                         : widget.library.favorites)
-                    .where((item) => item.sourceId == widget.sourceId)
+                    .where(
+                      (item) =>
+                          item.sourceId == widget.sourceId ||
+                          (widget.includeCustomSites &&
+                              isRuleLibrarySource(item.sourceId)),
+                    )
                     .toList();
 
             final scaler = MediaQuery.textScalerOf(context);

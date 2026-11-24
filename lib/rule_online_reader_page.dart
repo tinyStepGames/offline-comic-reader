@@ -14,6 +14,8 @@ import 'services/chapter_image_url_cache.dart';
 import 'services/opened_chapter_store.dart';
 import 'services/rule_downloads.dart';
 import 'services/site_rule_store.dart';
+import 'services/rule_library.dart';
+import 'rule_library_widgets.dart';
 
 class RuleOnlineReaderPage extends StatefulWidget {
   const RuleOnlineReaderPage({
@@ -22,6 +24,8 @@ class RuleOnlineReaderPage extends StatefulWidget {
     required this.chapters,
     required this.initialIndex,
     this.workThumbnail,
+    this.workUrl,
+    this.workTitle,
   }) : assert(chapters.length > 0),
        assert(initialIndex >= 0 && initialIndex < chapters.length);
 
@@ -31,6 +35,8 @@ class RuleOnlineReaderPage extends StatefulWidget {
   final List<RuleBrowseItem> chapters;
   final int initialIndex;
   final Uri? workThumbnail;
+  final String? workUrl;
+  final String? workTitle;
 
   @override
   State<RuleOnlineReaderPage> createState() => _RuleOnlineReaderPageState();
@@ -194,6 +200,30 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
 
   Future<void> _rememberChapterOpened(String chapterUrl) async {
     try {
+      final chapter = widget.chapters.firstWhere(
+        (item) => item.url?.removeFragment().toString() == chapterUrl,
+      );
+      final downloads = await RuleDownloads.open();
+
+      await rememberRuleLibrary(
+        store: downloads.store,
+        record: ruleLibraryWork(
+          site: widget.site,
+          workUrl: widget.workUrl ?? chapterUrl,
+          title: widget.workTitle ?? chapter.title,
+          thumbnail: widget.workThumbnail,
+        ),
+        chapter: chapter,
+        chapters: widget.chapters,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('履歴を保存できませんでした：$error')));
+      }
+    }
+    try {
       await OpenedChapterStore.shared.mark(
         siteId: widget.site.id,
         chapterUrl: chapterUrl,
@@ -287,6 +317,12 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
             onOpened: () {
               unawaited(_rememberChapterOpened(chapterUrl));
             },
+            chapterStateAction: RuleLibraryFavoriteButton(
+              site: widget.site,
+              workUrl: widget.workUrl ?? chapterUrl,
+              title: widget.workTitle ?? chapter.title,
+              thumbnail: widget.workThumbnail,
+            ),
             progressKey: ReadingKey(
               // 既存の組み込みサイトの識別子とは分離する。
               sourceId: 'custom-site:${widget.site.id}',

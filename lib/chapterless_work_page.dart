@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'rule_browse_page.dart';
 import 'rule_download_button.dart';
 import 'rule_online_reader_page.dart';
+import 'rule_library_widgets.dart';
 import 'services/chapterless_work.dart';
 import 'services/headless_download_page.dart';
 import 'services/html_probe.dart';
@@ -69,6 +70,8 @@ class ChapterlessReaderPage extends StatelessWidget {
           chapters: chapters,
           initialIndex: 0,
           workThumbnail: item.thumbnail,
+          workUrl: workUrl.toString(),
+          workTitle: item.title,
         ),
         Positioned(
           top: 8,
@@ -102,10 +105,12 @@ class ChapterlessDetailsPage extends StatefulWidget {
     super.key,
     required this.site,
     required this.item,
+    this.resumeChapter,
   });
 
   final SavedSiteRule site;
   final RuleBrowseItem item;
+  final RuleBrowseItem? resumeChapter;
 
   @override
   State<ChapterlessDetailsPage> createState() => _ChapterlessDetailsPageState();
@@ -190,7 +195,9 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
 
   Future<void> _read() async {
     final result = _result;
-    if (_busy || _opening || result == null || result.readUrl == null) {
+    final readUrl = widget.resumeChapter?.url ?? result?.readUrl;
+
+    if (_busy || _opening || readUrl == null) {
       return;
     }
 
@@ -201,8 +208,8 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
           builder: (_) => ChapterlessReaderPage(
             site: widget.site,
             item: _readerItem(),
-            workUrl: result.pageUri,
-            readUrl: result.readUrl,
+            workUrl: result?.pageUri ?? widget.item.url!,
+            readUrl: readUrl,
           ),
         ),
       );
@@ -244,12 +251,23 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
   Widget build(BuildContext context) {
     final result = _result;
     final canRead =
-        !_busy && result?.readUrl != null && widget.site.images != null;
+        !_busy &&
+        (widget.resumeChapter?.url ?? result?.readUrl) != null &&
+        widget.site.images != null;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.item.title),
         actions: [
+          if (widget.item.url != null)
+            RuleLibraryFavoriteButton(
+              site: widget.site,
+              workUrl: widget.item.url.toString(),
+              title: _result?.details.title.isNotEmpty == true
+                  ? _result!.details.title
+                  : widget.item.title,
+              thumbnail: _result?.details.thumbnail ?? widget.item.thumbnail,
+            ),
           IconButton(
             tooltip: '再読み込み',
             onPressed: _busy ? null : _load,
@@ -286,7 +304,7 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
                   key: const ValueKey('chapterless-read'),
                   onPressed: canRead ? _read : null,
                   icon: const Icon(Icons.menu_book_outlined),
-                  label: const Text('読む'),
+                  label: Text(widget.resumeChapter == null ? '読む' : '続きを読む'),
                 ),
               ),
               if (result != null &&
@@ -324,9 +342,7 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
             ),
           if (result != null)
             for (final issue in result.details.issues.where(
-              (issue) => !RegExp(
-                r'^作品の表紙：\d+件あるため先頭を使用$',
-              ).hasMatch(issue),
+              (issue) => !RegExp(r'^作品の表紙：\d+件あるため先頭を使用$').hasMatch(issue),
             ))
               Padding(
                 padding: const EdgeInsets.only(top: 8),

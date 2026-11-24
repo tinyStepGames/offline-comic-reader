@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'reading_progress.dart';
+import 'reader_page_counter.dart';
 import 'reader_horizontal_pager.dart';
 import 'reader_network_image.dart';
 import 'services/reader_look_ahead.dart';
@@ -605,14 +606,29 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                               icon: const Icon(Icons.arrow_back),
                             ),
                             Expanded(
-                              child: Text(
-                                widget.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      widget.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_count > 0) ...[
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: ReaderPageCounter(
+                                        current: _index + 1,
+                                        total: _count,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                             if (widget.chapterStateAction != null)
