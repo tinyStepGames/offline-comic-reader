@@ -323,7 +323,11 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
               ),
             ),
           if (result != null)
-            for (final issue in result.details.issues)
+            for (final issue in result.details.issues.where(
+              (issue) => !RegExp(
+                r'^作品の表紙：\d+件あるため先頭を使用$',
+              ).hasMatch(issue),
+            ))
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
