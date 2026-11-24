@@ -1,3 +1,5 @@
+import 'video_download_page.dart';
+import 'services/rule_video_support.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
@@ -45,7 +47,7 @@ class ChapterlessReaderPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (site.images == null) {
+    if (!canOpenRuleContent(site)) {
       return Scaffold(
         appBar: AppBar(title: Text(item.title)),
         body: const Padding(
@@ -73,28 +75,29 @@ class ChapterlessReaderPage extends StatelessWidget {
           workUrl: workUrl.toString(),
           workTitle: item.title,
         ),
-        Positioned(
-          top: 8,
-          right: 8,
-          child: SafeArea(
-            child: Material(
-              color: Colors.black87,
-              shape: const CircleBorder(),
-              child: RuleDownloadButton(
-                site: site,
-                chapter: ruleSavedChapter(
-                  siteId: site.id,
-                  workUrl: workUrl.toString(),
-                  chapterUrl: target.toString(),
-                  title: item.title,
-                  publishedDateText: item.date,
+        if (!usesRuleVideo(site))
+          Positioned(
+            top: 8,
+            right: 8,
+            child: SafeArea(
+              child: Material(
+                color: Colors.black87,
+                shape: const CircleBorder(),
+                child: RuleDownloadButton(
+                  site: site,
+                  chapter: ruleSavedChapter(
+                    siteId: site.id,
+                    workUrl: workUrl.toString(),
+                    chapterUrl: target.toString(),
+                    title: item.title,
+                    publishedDateText: item.date,
+                  ),
+                  workTitle: item.title,
+                  renderedFetcher: fetchChapterlessRendered,
                 ),
-                workTitle: item.title,
-                renderedFetcher: fetchChapterlessRendered,
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -253,7 +256,7 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
     final canRead =
         !_busy &&
         (widget.resumeChapter?.url ?? result?.readUrl) != null &&
-        widget.site.images != null;
+        canOpenRuleContent(widget.site);
 
     return Scaffold(
       appBar: AppBar(
@@ -307,9 +310,22 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
                   label: Text(widget.resumeChapter == null ? '読む' : '続きを読む'),
                 ),
               ),
+              if (canRead &&
+                  usesRuleVideo(widget.site) &&
+                  (result?.pageUri ?? widget.item.url) != null)
+                VideoDownloadButton(
+                  site: widget.site,
+                  workUrl: (result?.pageUri ?? widget.item.url)!.toString(),
+                  chapterUrl: (widget.resumeChapter?.url ?? result?.readUrl)!
+                      .toString(),
+                  title: _readerItem().title,
+                  workTitle: _readerItem().title,
+                  enabled: !_opening,
+                ),
               if (result != null &&
                   result.readUrl != null &&
-                  widget.site.images != null)
+                  widget.site.images != null &&
+                  !usesRuleVideo(widget.site))
                 RuleDownloadButton(
                   site: widget.site,
                   chapter: ruleSavedChapter(
@@ -324,7 +340,7 @@ class _ChapterlessDetailsPageState extends State<ChapterlessDetailsPage> {
                 ),
             ],
           ),
-          if (widget.site.images == null)
+          if (!canOpenRuleContent(widget.site))
             const Padding(
               padding: EdgeInsets.only(top: 12),
               child: Text(

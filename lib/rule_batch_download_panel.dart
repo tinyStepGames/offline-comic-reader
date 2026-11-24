@@ -1,3 +1,4 @@
+import 'services/rule_video_support.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -42,6 +43,7 @@ class _RuleBatchDownloadPanelState extends State<RuleBatchDownloadPanel> {
   }
 
   Future<void> _attach() async {
+    if (usesRuleVideo(widget.site)) return;
     try {
       final downloads = await RuleDownloads.open();
       if (!mounted) return;
@@ -172,6 +174,7 @@ class _RuleBatchDownloadPanelState extends State<RuleBatchDownloadPanel> {
 
   @override
   Widget build(BuildContext context) {
+    if (usesRuleVideo(widget.site)) return const SizedBox.shrink();
     final downloads = _downloads;
     final batch = downloads?.batch.state.value;
     final mine = batch != null && batch.scope == _scope;

@@ -119,6 +119,7 @@ class _SiteReadingEditorPageState extends State<SiteReadingEditorPage>
 
   SiteReadingSettings _settings() => SiteReadingSettings(
     mode: _mode,
+    video: widget.site.readingSettings?.video,
     detailsRule: _mode == SiteReadingMode.details ? _detailRule() : null,
     readLink: _mode == SiteReadingMode.details && _separateLink
         ? ListFieldRule(

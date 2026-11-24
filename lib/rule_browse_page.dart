@@ -1,3 +1,5 @@
+import 'video_download_page.dart';
+import 'services/rule_video_support.dart';
 import 'site_browse_tabs_view.dart';
 import 'site_search_page.dart';
 import 'services/work_tag_link.dart';
@@ -409,7 +411,10 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
           if (resume != null) ...[
             FilledButton.icon(
               key: const ValueKey('rule-history-resume'),
-              onPressed: _busy || _openingItem || widget.site.images == null
+              onPressed:
+                  _busy ||
+                      _openingItem ||
+                      !canOpenRuleContent(widget.navigationSite ?? widget.site)
                   ? null
                   : _resumeHistory,
               icon: const Icon(Icons.play_arrow),
@@ -427,7 +432,8 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
             fallbackThumbnail: widget.workThumbnail,
             onTagTap: (tag) => _openTag(tag),
           ),
-          if (widget.targetUrl != null) ...[
+          if (widget.targetUrl != null &&
+              !usesRuleVideo(widget.navigationSite ?? widget.site)) ...[
             const SizedBox(height: 16),
             RuleBatchDownloadPanel(
               site: widget.site,
@@ -515,7 +521,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
         _openingItem ||
         resume?.url == null ||
         workUrl == null ||
-        widget.site.images == null) {
+        !canOpenRuleContent(widget.navigationSite ?? widget.site)) {
       return;
     }
 
@@ -835,7 +841,7 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
 
     final missing = _isWorks
         ? !widget.site.rules.containsKey('chapters')
-        : widget.site.images == null;
+        : !canOpenRuleContent(widget.navigationSite ?? widget.site);
 
     if (missing) {
       await showDialog<void>(
@@ -1034,7 +1040,21 @@ class _RuleBrowsePageState extends State<RuleBrowsePage> {
               ),
             ),
             const SizedBox(width: 8),
-            if (!_isWorks && item.url != null && widget.targetUrl != null)
+            if (!_isWorks &&
+                item.url != null &&
+                widget.targetUrl != null &&
+                usesRuleVideo(widget.navigationSite ?? widget.site))
+              VideoDownloadButton(
+                site: widget.navigationSite ?? widget.site,
+                workUrl: widget.targetUrl!,
+                chapterUrl: item.url!.toString(),
+                title: item.title,
+                workTitle: _result?.workDetails.title.isNotEmpty == true
+                    ? _result!.workDetails.title
+                    : widget.workTitle ?? '',
+                enabled: !_busy && !_openingItem,
+              )
+            else if (!_isWorks && item.url != null && widget.targetUrl != null)
               RuleDownloadButton(
                 site: widget.site,
                 chapter: ruleSavedChapter(

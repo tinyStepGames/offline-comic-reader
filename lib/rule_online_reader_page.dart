@@ -1,3 +1,5 @@
+import 'services/rule_video_support.dart';
+import 'rule_video_reader_page.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -101,6 +103,7 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
   }
 
   Future<void> _load(int target) async {
+    if (usesRuleVideo(widget.site)) return;
     if (_loading ||
         target < 0 ||
         target >= widget.chapters.length ||
@@ -246,6 +249,16 @@ class _RuleOnlineReaderPageState extends State<RuleOnlineReaderPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (usesRuleVideo(widget.site)) {
+      return RuleVideoReaderPage(
+        site: widget.site,
+        chapters: widget.chapters,
+        initialIndex: widget.initialIndex,
+        workUrl: widget.workUrl,
+        workTitle: widget.workTitle,
+        workThumbnail: widget.workThumbnail,
+      );
+    }
     final chapter = widget.chapters[_index];
 
     if (!_opened && (_loading || _error == null)) {

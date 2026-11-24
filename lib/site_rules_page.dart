@@ -15,6 +15,7 @@ import 'services/list_extraction_rule.dart';
 import 'services/site_rule_store.dart';
 import 'services/site_reading_settings.dart';
 import 'site_reading_editor_page.dart';
+import 'video_source_editor_page.dart';
 
 class SiteRulesPage extends StatefulWidget {
   const SiteRulesPage({super.key, required this.store, this.initialSiteId});
@@ -169,6 +170,19 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
       MaterialPageRoute<void>(
         builder: (_) =>
             SiteReadingEditorPage(repository: _repository, site: site),
+      ),
+    );
+
+    if (mounted) await _load();
+  }
+
+  Future<void> _editVideo(SavedSiteRule site) async {
+    if (_busy) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            VideoSourceEditorPage(repository: _repository, site: site),
       ),
     );
 
@@ -407,6 +421,16 @@ class _SiteRulesPageState extends State<SiteRulesPage> {
           ),
           if (site.readingMode == SiteReadingMode.chapters)
             _slot(site, 'chapters', 'チャプター一覧'),
+          ListTile(
+            leading: const Icon(Icons.ondemand_video),
+            title: const Text('動画設定・再生テスト'),
+            subtitle: Text(
+              site.readingSettings?.video == null
+                  ? '未設定・抽出と再生を確認'
+                  : '動画再生を使用・タップして編集',
+            ),
+            onTap: _busy ? null : () => _editVideo(site),
+          ),
           ListTile(
             title: const Text('本文画像'),
             subtitle: Text(

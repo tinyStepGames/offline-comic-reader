@@ -1,3 +1,4 @@
+import 'rule_video_support.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -245,6 +246,7 @@ class RuleDownloads {
     required String workTitle,
     RenderedRulePageFetcher? renderedFetcher,
   }) async {
+    requireRuleImageDownload(site);
     if (isBusy) return;
 
     _singleBusy = true;
@@ -270,6 +272,7 @@ class RuleDownloads {
     if (isBusy) {
       throw StateError('別のダウンロードを実行中です');
     }
+    requireRuleImageDownload(site);
     if (site.images == null) {
       throw const FormatException('本文画像ルールが未設定です');
     }
@@ -335,6 +338,7 @@ class RuleDownloads {
     _transfer = transfer;
 
     try {
+      requireRuleImageDownload(site);
       _validateChapter(chapter);
       if (chapter.sourceId != _sourceId(site.id)) {
         throw const FormatException('別サイトのチャプターは保存できません');

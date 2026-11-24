@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'html_probe.dart';
 import 'list_extraction_rule.dart';
+import 'video_source.dart';
 
 enum SiteReadingMode { chapters, direct, details }
 
@@ -22,6 +23,7 @@ class SiteReadingSettings {
     this.mode = SiteReadingMode.chapters,
     this.detailsRule,
     this.readLink,
+    this.video,
   });
 
   final SiteReadingMode mode;
@@ -36,8 +38,18 @@ class SiteReadingSettings {
   /// nullなら、詳細ページ自体を本文画像の取得先にする。
   /// 設定があれば、詳細ページから「読む」リンクを抽出する。
   final ListFieldRule? readLink;
+  final VideoSourceSettings? video;
+
+  SiteReadingSettings withVideo(VideoSourceSettings? value) =>
+      SiteReadingSettings(
+        mode: mode,
+        detailsRule: detailsRule,
+        readLink: readLink,
+        video: value,
+      );
 
   void validate() {
+    video?.validate();
     final rule = detailsRule;
     final link = readLink;
 
@@ -86,6 +98,7 @@ class SiteReadingSettings {
 
   void validateFor(Iterable<ListExtractionRule> rules) {
     validate();
+    video?.validateFor(rules.map((rule) => rule.pageUrl));
 
     final detail = detailsRule;
     if (detail == null) return;
@@ -100,14 +113,15 @@ class SiteReadingSettings {
   }
 
   Map<String, dynamic> toJson() => {
-    'version': 1,
+    'version': video == null ? 1 : 2,
     'mode': mode.name,
+    if (video != null) 'video': video!.toJson(),
     if (detailsRule != null) 'detailsRule': detailsRule!.toJson(),
     if (readLink != null) 'readLink': readLink!.toJson(),
   };
 
   factory SiteReadingSettings.fromJson(Map<String, dynamic> data) {
-    if (data['version'] != 1 ||
+    if ((data['version'] != 1 && data['version'] != 2) ||
         data['mode'] is! String ||
         data.keys.any(
           (key) => !const {
@@ -115,9 +129,15 @@ class SiteReadingSettings {
             'mode',
             'detailsRule',
             'readLink',
+            'video',
           }.contains(key),
         )) {
       throw const FormatException('未対応の開き方設定です');
+    }
+
+    if (data['video'] != null &&
+        (data['version'] != 2 || data['video'] is! Map)) {
+      throw const FormatException('動画設定には開き方設定バージョン2が必要です');
     }
 
     final matching = SiteReadingMode.values.where(
@@ -132,6 +152,11 @@ class SiteReadingSettings {
 
     final settings = SiteReadingSettings(
       mode: matching.single,
+      video: data['video'] == null
+          ? null
+          : VideoSourceSettings.fromJson(
+              Map<String, dynamic>.from(data['video'] as Map),
+            ),
       detailsRule: data['detailsRule'] == null
           ? null
           : ListExtractionRule.parse(jsonEncode(data['detailsRule'])),
