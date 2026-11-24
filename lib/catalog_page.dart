@@ -1,608 +1,1188 @@
-part of 'main.dart';
+import 'site_directory_pane.dart';
+import 'site_rules_page.dart';
+import 'rule_browse_page.dart';
+import 'services/site_rule_store.dart';
+import 'services/last_opened_site_store.dart';
+import 'list_rule_lab_page.dart';
+import 'saved_downloads_page.dart';
+import 'chapter_read_state_widgets.dart';
+import 'services/chapter_read_state_store.dart';
+import 'chapter_details.dart';
+import 'chapter_order.dart';
+import 'favorite_updates_page.dart';
+import 'cover_widgets.dart';
+import 'library_widgets.dart';
+import 'services/user_library_store.dart';
+import 'package:flutter/material.dart';
 
-class ComicSeries {
-  const ComicSeries(this.id, this.title, this.indexFile, this.section);
+import 'chapter_reader_page.dart';
+import 'services/download_store.dart';
+import 'sources/source_adapter.dart';
 
-  final String id;
-  final String title;
-  final String indexFile;
-  final String section;
+class SourceHome extends StatefulWidget {
+  const SourceHome({super.key, required this.adapter, required this.store});
 
-  Uri get url =>
-      Uri.parse('https://www.peppercarrot.com/en/webcomics/$indexFile.html');
-}
-
-const comicSeries = [
-  ComicSeries('peppercarrot', 'ペッパー＆キャロット', 'peppercarrot', 'webcomic'),
-  ComicSeries(
-    'mini',
-    'ミニファンタジーシアター',
-    'miniFantasyTheater',
-    'miniFantasyTheater',
-  ),
-  ComicSeries('misc', 'その他', 'misc', 'webcomic-misc'),
-];
-
-class ComicEpisode {
-  const ComicEpisode(this.series, this.title, this.url);
-
-  final ComicSeries series;
-  final String title;
-  final Uri url;
-
-  String get slug => url.pathSegments.last.replaceFirst(RegExp(r'\.html$'), '');
-
-  String get id {
-    if (series.id == 'peppercarrot') {
-      final match = RegExp(r'^ep(\d+)_').firstMatch(slug)!;
-      final number = int.parse(match.group(1)!);
-      return 'peppercarrot-en-ep${number.toString().padLeft(2, '0')}';
-    }
-    return '${series.id}-en-$slug';
-  }
-
-  Map<String, dynamic> toJson() => {'title': title, 'url': url.toString()};
-
-  static ComicEpisode parse(String address, String title) {
-    final url = Uri.parse(address);
-
-    if (url.scheme != 'https' ||
-        url.host != 'www.peppercarrot.com' ||
-        url.hasQuery ||
-        url.hasFragment) {
-      throw const FormatException('未対応のURLです');
-    }
-
-    final match = RegExp(
-      r'^/en/(webcomic|miniFantasyTheater|webcomic-misc)/'
-      r'([A-Za-z0-9_-]+)\.html$',
-    ).firstMatch(url.path);
-
-    if (match == null) {
-      throw const FormatException('チャプターURLではありません');
-    }
-
-    final series = comicSeries.firstWhere(
-      (item) => item.section == match.group(1),
-    );
-
-    if (series.id == 'peppercarrot' &&
-        !RegExp(r'^ep\d+_').hasMatch(match.group(2)!)) {
-      throw const FormatException('話数形式が不正です');
-    }
-
-    return ComicEpisode(
-      series,
-      title.trim().isEmpty ? match.group(2)! : title.trim(),
-      url,
-    );
-  }
-}
-
-class _ComicPageData {
-  const _ComicPageData(this.images, this.credits);
-
-  final List<Uri> images;
-  final String credits;
-}
-
-class CatalogPage extends StatefulWidget {
-  const CatalogPage({super.key, required this.root, this.series});
-
-  final Directory root;
-  final ComicSeries? series;
+  final SourceAdapter adapter;
+  final DownloadStore store;
 
   @override
-  State<CatalogPage> createState() => _CatalogPageState();
+  State<SourceHome> createState() => _SourceHomeState();
 }
 
-class _CatalogPageState extends State<CatalogPage> {
-  final Map<String, String> _seriesThumbnails = {};
-  bool _thumbnailLoading = false;
+class _SourceHomeState extends State<SourceHome> {
+  SavedSiteRule? _activeSite;
+  List<SavedSiteRule> _savedSites = [];
+  bool _sitesBusy = false;
+  String? _sitesError;
 
-  Widget _thumbnailPlaceholder() {
-    return const ColoredBox(
-      color: Color(0xFF252525),
-      child: Center(
-        child: Icon(
-          Icons.collections_bookmark_outlined,
-          size: 36,
-          color: Colors.white38,
+  LastOpenedSiteStore get _lastSiteStore =>
+      LastOpenedSiteStore(widget.store.root);
+
+  Future<void> _initializeHome() async {
+    // 最初に選択サイトを復元する。
+    // 復元が終わるまでは作品一覧の取得を開始しない。
+    final remembered = await _lastSiteStore.read();
+
+    try {
+      final sites = await SiteRuleStore(widget.store.root).load();
+      if (!mounted) return;
+
+      _savedSites = sites;
+
+      if (remembered == LastOpenedSiteStore.builtinSiteId) {
+        _activeSite = null;
+        _section = 0;
+      } else {
+        SavedSiteRule? selected;
+
+        for (final site in sites) {
+          if (site.id == remembered && site.rules.containsKey('works')) {
+            selected = site;
+            break;
+          }
+        }
+
+        _activeSite = selected;
+        _section = selected == null ? 4 : 0;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _sitesError = 'サイト一覧を読み込めませんでした：$error';
+      _section = 4;
+    }
+
+    if (!mounted) return;
+    await _restoreTabs();
+  }
+
+  Future<void> _reloadSiteDirectory({bool restoreSelection = false}) async {
+    if (_sitesBusy) return;
+
+    setState(() {
+      _sitesBusy = true;
+      _sitesError = null;
+    });
+
+    try {
+      final sites = await SiteRuleStore(widget.store.root).load();
+      final remembered = restoreSelection ? await _lastSiteStore.read() : null;
+
+      if (!mounted) return;
+
+      setState(() {
+        _savedSites = sites;
+
+        if (restoreSelection &&
+            remembered == LastOpenedSiteStore.builtinSiteId) {
+          _activeSite = null;
+        } else {
+          final wantedId = restoreSelection && remembered != null
+              ? remembered
+              : _activeSite?.id;
+
+          SavedSiteRule? selected;
+
+          for (final site in sites) {
+            if (site.id == wantedId && site.rules.containsKey('works')) {
+              selected = site;
+              break;
+            }
+          }
+
+          if (wantedId != null) {
+            _activeSite = selected;
+
+            if (selected == null && _section == 0) {
+              _section = 4;
+            }
+          }
+        }
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _sitesError = 'サイト一覧を読み込めませんでした：$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sitesBusy = false);
+    }
+  }
+
+  Future<void> _selectSite(SavedSiteRule? site) async {
+    if (_loading) return;
+
+    if (site != null && !site.rules.containsKey('works')) {
+      await _openSiteManager(site);
+      return;
+    }
+
+    setState(() {
+      _activeSite = site;
+      _section = 0;
+    });
+
+    try {
+      await _lastSiteStore.write(site?.id ?? LastOpenedSiteStore.builtinSiteId);
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '起動サイトを保存できませんでした。'
+            '次回起動時に元のサイトへ戻る場合があります。',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openSiteManager([SavedSiteRule? site]) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            SiteRulesPage(store: widget.store, initialSiteId: site?.id),
+      ),
+    );
+
+    if (!mounted) return;
+    await _reloadSiteDirectory(restoreSelection: true);
+  }
+
+  Future<void> _openRuleLab() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ListRuleLabPage(
+          store: widget.store,
+          initialPage: null,
+          initialUrl: 'https://',
+          initialSelector: '',
+          initialAcquisition: 'staticHtml',
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    await _reloadSiteDirectory(restoreSelection: true);
+  }
+
+  void _changeHomeSection(int navigationIndex) {
+    // 既存の棚の内部番号を維持し、表示順だけ変更する。
+    const sections = [0, 4, 1, 2, 3];
+
+    setState(() => _section = sections[navigationIndex]);
+
+    if (_section == 4) {
+      _reloadSiteDirectory();
+    }
+  }
+
+  int _section = 4;
+  late List<SourceTab> _tabs;
+  List<SourceTab> _knownTabs = [];
+  bool _loading = true;
+
+  String get _settingsKey => '${widget.adapter.id}:tab-settings';
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = widget.adapter.defaultTabs;
+    _knownTabs = List.of(_tabs);
+    _initializeHome();
+  }
+
+  Future<void> _restoreTabs() async {
+    final cached = await widget.store.readCache(_settingsKey);
+
+    try {
+      if (cached is Map) {
+        final selected = (cached['selected'] as List)
+            .map(
+              (item) =>
+                  SourceTab.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+
+        final known = (cached['known'] as List)
+            .map(
+              (item) =>
+                  SourceTab.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+
+        if (selected.isNotEmpty) {
+          _tabs = selected;
+          _knownTabs = known;
+        }
+      }
+    } catch (_) {
+      // 設定が不正ならアダプターの初期タブを使用する。
+    }
+
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _addTab() async {
+    setState(() => _loading = true);
+
+    try {
+      _knownTabs = await widget.adapter.discoverTabs();
+    } catch (_) {
+      // オフラインなら以前取得した候補を使う。
+    }
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    final candidates = _knownTabs
+        .where((item) => !_tabs.any((tab) => tab.id == item.id))
+        .toList();
+
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('追加候補がありません。必要に応じてネット接続を確認してください。')),
+      );
+      return;
+    }
+
+    final chosen = await showDialog<SourceTab>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('タブを追加'),
+        children: [
+          for (final candidate in candidates)
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.pop(dialogContext, candidate);
+              },
+              child: Text(candidate.title),
+            ),
+        ],
+      ),
+    );
+
+    if (chosen == null || !mounted) return;
+
+    setState(() => _tabs = [..._tabs, chosen]);
+
+    try {
+      await widget.store.writeCache(_settingsKey, {
+        'selected': _tabs.map((item) => item.toJson()).toList(),
+        'known': _knownTabs.map((item) => item.toJson()).toList(),
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('タブ設定を保存できませんでした')));
+    }
+  }
+
+  Future<void> _openFavorite(LibraryItem item) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterListPage(
+          adapter: widget.adapter,
+          store: widget.store,
+          tab: item.tab,
+          work: item.work,
         ),
       ),
     );
   }
 
-  bool _validThumbnail(String address) {
-    final url = Uri.tryParse(address);
+  Future<void> _openHistory(LibraryItem item) async {
+    final chapter = item.chapter;
+    if (chapter == null) return;
 
-    return url != null &&
-        url.scheme == 'https' &&
-        url.host == 'www.peppercarrot.com';
-  }
+    final cacheKey =
+        '${widget.adapter.id}:chapters:'
+        '${item.tab.query.toJson()}:${item.work.id}';
 
-  Future<void> _loadSeriesThumbnails() async {
-    if (_thumbnailLoading) return;
+    final chapters = <ComicChapter>[];
+    final cached = await widget.store.readCache(cacheKey);
 
-    setState(() => _thumbnailLoading = true);
+    if (cached is List) {
+      for (final entry in cached) {
+        try {
+          final parsed = ComicChapter.fromJson(
+            Map<String, dynamic>.from(entry as Map),
+          );
 
-    final cache = File(p.join(widget.root.path, 'series-thumbnails.json'));
-
-    try {
-      // 保存済みURLを先に表示する。
-      try {
-        if (await cache.exists()) {
-          final data =
-              jsonDecode(await cache.readAsString()) as Map<String, dynamic>;
-
-          final cached = <String, String>{};
-
-          for (final series in comicSeries) {
-            final address = data[series.id];
-
-            if (address is String && _validThumbnail(address)) {
-              cached[series.id] = address;
-            }
+          if (parsed.sourceId == widget.adapter.id &&
+              parsed.language == item.tab.query.language &&
+              parsed.workId == item.work.id) {
+            chapters.add(parsed);
           }
-
-          if (!mounted) return;
-
-          setState(() {
-            _seriesThumbnails.addAll(cached);
-          });
+        } catch (_) {
+          // 読める項目を優先。
         }
-      } catch (_) {
-        // キャッシュが不正でも公式サイトから取得を試す。
-      }
-
-      final indexUrl = Uri.parse(
-        'https://www.peppercarrot.com/ja/webcomics/'
-        'peppercarrot.html',
-      );
-
-      final response = await _dio.get<String>(
-        indexUrl.toString(),
-        options: Options(responseType: ResponseType.plain),
-      );
-
-      final document = html.parse(response.data ?? '');
-
-      const idMap = {
-        'peppercarrot': 'peppercarrot',
-        'miniFantasyTheater': 'mini',
-        'misc': 'misc',
-      };
-
-      final result = <String, String>{};
-
-      // background: url('...') のURL部分を取得。
-      final cssUrl = RegExp(
-        r'''url\(\s*(['"]?)(.*?)\1\s*\)''',
-        caseSensitive: false,
-      );
-
-      for (final link in document.querySelectorAll('a.sidebar-img-btn[id]')) {
-        final seriesId = idMap[link.id];
-        if (seriesId == null) continue;
-
-        final style = link.attributes['style'] ?? '';
-        final match = cssUrl.firstMatch(style);
-        final address = match?.group(2)?.trim();
-
-        if (address == null || address.isEmpty) continue;
-
-        final resolved = indexUrl.resolve(address).toString();
-
-        if (_validThumbnail(resolved)) {
-          result[seriesId] = resolved;
-        }
-      }
-
-      if (result.isEmpty) {
-        throw StateError('作品画像のURLが見つかりません');
-      }
-
-      if (!mounted) return;
-
-      setState(() {
-        _seriesThumbnails.addAll(result);
-      });
-
-      await widget.root.create(recursive: true);
-      await cache.writeAsString(jsonEncode(_seriesThumbnails), flush: true);
-    } catch (_) {
-      // オフライン時などは既存URLまたは代替アイコンを使用。
-    } finally {
-      if (mounted) {
-        setState(() => _thumbnailLoading = false);
       }
     }
+
+    if (chapters.isEmpty) {
+      try {
+        chapters.addAll(
+          await widget.adapter.fetchChapters(item.work, item.tab.query),
+        );
+      } catch (_) {
+        // オフラインでも、履歴の話だけは開けるようにする。
+      }
+    }
+
+    var index = chapters.indexWhere((entry) => entry.id == chapter.id);
+
+    if (index < 0) {
+      chapters
+        ..clear()
+        ..add(chapter);
+      index = 0;
+    }
+
+    if (!mounted) return;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChapterReaderPage(
+          adapter: widget.adapter,
+          store: widget.store,
+          chapters: List.unmodifiable(chapters),
+          initialIndex: (index),
+          onChapterOpened: (opened) => UserLibraryStore.forRoot(
+            widget.store.root,
+          ).remember(widget.adapter.id, item.tab, item.work, opened),
+        ),
+      ),
+    );
   }
 
-  final Dio _dio = Dio(
-    BaseOptions(
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-    ),
-  );
+  @override
+  void dispose() {
+    widget.adapter.close();
+    widget.store.close();
+    super.dispose();
+  }
 
-  List<ComicEpisode> _episodes = [];
-  final Set<String> _saved = {};
+  @override
+  Widget build(BuildContext context) {
+    final customDiscovery = _section == 0 && _activeSite != null;
 
-  bool _busy = false;
-  bool _batch = false;
-  bool _stop = false;
-  String? _workingId;
-  String _status = '';
+    final title = switch (_section) {
+      1 => 'お気に入り',
+      2 => '閲覧履歴',
+      3 => '保存済み',
+      4 => 'サイト一覧',
+      _ => _activeSite?.name ?? widget.adapter.name,
+    };
 
-  bool get _locked => _busy || _batch || _workingId != null;
+    const sections = [0, 4, 1, 2, 3];
 
-  ComicSeries get _series => widget.series!;
+    return DefaultTabController(
+      key: ValueKey(_tabs.map((item) => item.id).join('|')),
+      length: _tabs.length,
+      child: Scaffold(
+        backgroundColor: Colors.black,
 
-  File get _cache => File(
-    p.join(
-      widget.root.path,
-      _series.id == 'peppercarrot'
-          ? 'catalog.json'
-          : 'catalog-${_series.id}.json',
-    ),
-  );
+        // 独自サイト側のAppBarを使い、上部バーの二重表示を避ける。
+        appBar: customDiscovery
+            ? null
+            : AppBar(
+                backgroundColor: Colors.black,
+                title: Text(title),
+                actions: [
+                  if (_section == 0 || _section == 4)
+                    IconButton(
+                      tooltip: '新規サイトルール作成',
+                      onPressed: _loading ? null : _openRuleLab,
+                      icon: const Icon(Icons.add_circle_outline),
+                    ),
+                  if (_section == 4)
+                    IconButton(
+                      tooltip: 'サイト一覧を更新',
+                      onPressed: _loading || _sitesBusy
+                          ? null
+                          : () => _reloadSiteDirectory(),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  if (_section == 1)
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => FavoriteUpdatesPage(
+                              adapter: widget.adapter,
+                              store: widget.store,
+                              library: UserLibraryStore.forRoot(
+                                widget.store.root,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.fiber_new_outlined),
+                      label: const Text('新着'),
+                    ),
+                  if (_section == 0 && _activeSite == null)
+                    IconButton(
+                      tooltip: '言語タブを追加',
+                      onPressed: _loading ? null : _addTab,
+                      icon: const Icon(Icons.add),
+                    ),
+                ],
+                bottom: _section == 0 && _activeSite == null
+                    ? TabBar(
+                        isScrollable: true,
+                        tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+                      )
+                    : null,
+              ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : IndexedStack(
+                index: _section,
+                children: [
+                  // サイト一覧表示中などは、未表示サイトの通信を始めない。
+                  _activeSite != null
+                      ? (_section == 0
+                            ? RuleBrowsePage(
+                                key: ValueKey(
+                                  'home-site:${_activeSite!.id}:'
+                                  '${_activeSite!.updatedAt.toIso8601String()}',
+                                ),
+                                site: _activeSite!,
+                              )
+                            : const SizedBox.shrink())
+                      : (_section == 0
+                            ? TabBarView(
+                                children: [
+                                  for (final tab in _tabs)
+                                    WorkListPage(
+                                      key: ValueKey(tab.id),
+                                      adapter: widget.adapter,
+                                      store: widget.store,
+                                      tab: tab,
+                                    ),
+                                ],
+                              )
+                            : const SizedBox.shrink()),
+                  LibraryShelf(
+                    library: UserLibraryStore.forRoot(widget.store.root),
+                    sourceId: widget.adapter.id,
+                    sourceName: widget.adapter.name,
+                    history: false,
+                    onOpen: _openFavorite,
+                  ),
+                  LibraryShelf(
+                    library: UserLibraryStore.forRoot(widget.store.root),
+                    sourceId: widget.adapter.id,
+                    sourceName: widget.adapter.name,
+                    history: true,
+                    onOpen: _openHistory,
+                  ),
+                  SavedDownloadsPane(
+                    adapter: widget.adapter,
+                    store: widget.store,
+                    active: _section == 3,
+                  ),
+                  SiteDirectoryPane(
+                    sites: _savedSites,
+                    activeSiteId: _activeSite?.id,
+                    busy: _sitesBusy,
+                    error: _sitesError,
+                    onOpen: (site) => _selectSite(site),
+                    onManage: (site) => _openSiteManager(site),
+                    onLab: _openRuleLab,
+                    onRefresh: () => _reloadSiteDirectory(),
+                  ),
+                ],
+              ),
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: sections.indexOf(_section),
+          onTap: _loading ? null : _changeHomeSection,
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: const Color(0xFF1A1A1A),
+          selectedItemColor: Colors.lightBlueAccent,
+          unselectedItemColor: Colors.white54,
+          selectedFontSize: 12,
+          unselectedFontSize: 12,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '発見'),
+            BottomNavigationBarItem(icon: Icon(Icons.language), label: 'サイト'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.star_border),
+              activeIcon: Icon(Icons.star),
+              label: 'お気に入り',
+            ),
+            BottomNavigationBarItem(icon: Icon(Icons.history), label: '履歴'),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.download_done),
+              label: '保存済み',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-  EpisodeStore _store(ComicEpisode episode) => EpisodeStore(
-    Directory(p.join(widget.root.path, episode.id)),
-    id: episode.id,
-    url: episode.url,
-    title: episode.title,
-  );
+class WorkListPage extends StatefulWidget {
+  const WorkListPage({
+    super.key,
+    required this.adapter,
+    required this.store,
+    required this.tab,
+  });
 
-  File _creditsFile(ComicEpisode episode) =>
-      File(p.join(widget.root.path, episode.id, 'credits.txt'));
+  final SourceAdapter adapter;
+  final DownloadStore store;
+  final SourceTab tab;
+
+  @override
+  State<WorkListPage> createState() => _WorkListPageState();
+}
+
+class _WorkListPageState extends State<WorkListPage>
+    with AutomaticKeepAliveClientMixin {
+  List<ComicWork> _works = [];
+  bool _busy = true;
+  String? _error;
+
+  String get _cacheKey =>
+      '${widget.adapter.id}:works:${widget.tab.query.toJson()}';
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
-    if (widget.series != null) {
-      _initialize();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    final cached = await widget.store.readCache(_cacheKey);
+
+    try {
+      if (cached is List) {
+        _works = cached
+            .map(
+              (item) =>
+                  ComicWork.fromJson(Map<String, dynamic>.from(item as Map)),
+            )
+            .toList();
+      }
+    } catch (_) {
+      _works = [];
+    }
+
+    if (_works.isEmpty) {
+      _works = widget.adapter.fallbackWorks(widget.tab.query);
+    }
+
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    // 初回、または明示更新時に公式ページから画像などを取得。
+    if (cached == null) await _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+
+    try {
+      final works = await widget.adapter.fetchWorks(widget.tab.query);
+
+      await widget.store.writeCache(
+        _cacheKey,
+        works.map((item) => item.toJson()).toList(),
+      );
+
+      if (!mounted) return;
+      setState(() => _works = works);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = '更新できませんでした：$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _placeholder() => const ColoredBox(
+    color: Color(0xFF252525),
+    child: Center(
+      child: Icon(Icons.collections_bookmark_outlined, color: Colors.white38),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 48,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Text('${_works.length}作品'),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _busy ? null : _refresh,
+                icon: const Icon(Icons.refresh),
+                label: const Text('更新'),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 3,
+          child: _busy
+              ? const LinearProgressIndicator(minHeight: 3)
+              : const SizedBox.expand(),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Text(_error!, style: const TextStyle(color: Colors.white60)),
+          ),
+        Expanded(
+          child: CoverGrid<ComicWork>(
+            items: _works,
+            workOf: (work) => work,
+            placeholderBuilder: _placeholder,
+            onOpen: (work) {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ChapterListPage(
+                    adapter: widget.adapter,
+                    store: widget.store,
+                    tab: widget.tab,
+                    work: work,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ChapterListPage extends StatefulWidget {
+  const ChapterListPage({
+    super.key,
+    required this.adapter,
+    required this.store,
+    required this.tab,
+    required this.work,
+  });
+
+  final SourceAdapter adapter;
+  final DownloadStore store;
+  final SourceTab tab;
+  final ComicWork work;
+
+  @override
+  State<ChapterListPage> createState() => _ChapterListPageState();
+}
+
+class _ChapterListPageState extends State<ChapterListPage> {
+  ChapterReadStateStore get _readStates =>
+      ChapterReadStateStore.forRoot(widget.store.root);
+
+  Future<void> _changeReadState(
+    ComicChapter chapter,
+    ChapterReadState next,
+  ) async {
+    if (_locked) return;
+    setState(() => _busy = true);
+
+    try {
+      await _readStates.setChapterState(chapter, next);
+
+      if (mounted) {
+        setState(() {
+          _status = next == ChapterReadState.completed
+              ? '読了にしました：${chapter.title}'
+              : '未読に戻しました：${chapter.title}';
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _status = '読書状態を保存できませんでした。\n$error');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String? _lastOpenedChapterId;
+  bool _readingEntryReady = false;
+  String? _readingEntryError;
+
+  UserLibraryStore get _readingLibrary =>
+      UserLibraryStore.forRoot(widget.store.root);
+
+  void _syncReadingEntry() {
+    if (!mounted) return;
+
+    String? latest;
+
+    for (final item in _readingLibrary.history) {
+      if (item.sourceId == widget.adapter.id &&
+          item.tab.query.language == widget.tab.query.language &&
+          item.work.id == widget.work.id) {
+        latest = item.chapter?.id;
+        break;
+      }
+    }
+
+    setState(() {
+      _lastOpenedChapterId = latest;
+      _readingEntryReady = true;
+      _readingEntryError = null;
+    });
+  }
+
+  Future<void> _loadReadingEntry() async {
+    try {
+      await _readingLibrary.load();
+      _syncReadingEntry();
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _readingEntryError = '履歴を読み込めませんでした：$error';
+      });
+    }
+  }
+
+  Widget _readingEntryButton() {
+    final target = readingEntryChapter(_chapters, _lastOpenedChapterId);
+
+    final hasHistory = _lastOpenedChapterId != null;
+    final error = _readingEntryError;
+
+    final String title;
+    final String detail;
+
+    if (error != null) {
+      title = '履歴の再読み込み';
+      detail = '履歴の読み込みに失敗しました';
+    } else if (!_readingEntryReady) {
+      title = '読書履歴を読み込み中';
+      detail = 'しばらくお待ちください';
+    } else if (hasHistory && target == null) {
+      title = '前回の話が一覧にありません';
+      detail = '一覧を更新するか、読みたい話を選んでください';
     } else {
-      _loadSeriesThumbnails();
+      title = hasHistory ? '続きから読む' : '最初の話を読む';
+      detail = target?.title ?? 'チャプターがありません';
+    }
+
+    final buttonHeight =
+        (MediaQuery.textScalerOf(context).scale(14) * 1.4 * 2).ceilToDouble() +
+        28;
+
+    return SizedBox(
+      height: buttonHeight,
+      child: Tooltip(
+        message: error ?? '$title\n$detail',
+        child: FilledButton.icon(
+          onPressed: _locked
+              ? null
+              : error != null
+              ? _loadReadingEntry
+              : !_readingEntryReady || target == null
+              ? null
+              : () => _open(target),
+          icon: const Icon(Icons.play_arrow),
+          label: SizedBox(
+            width: double.infinity,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chapterLabels(
+    ComicChapter chapter,
+    bool saved,
+    double titleHeight,
+    double subtitleHeight,
+    double dateHeight,
+  ) {
+    final previous = chapter.id == _lastOpenedChapterId;
+    final readStateHeight =
+        (MediaQuery.textScalerOf(context).scale(12) * 1.4).ceilToDouble() + 4;
+
+    final status = [
+      saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
+      if (previous) '前回開いた話',
+    ].join('・');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: titleHeight,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              chapter.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 16, height: 1.3),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: subtitleHeight,
+          child: Tooltip(
+            message: status,
+            child: Text(
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.3,
+                color: previous
+                    ? Colors.lightBlueAccent
+                    : saved
+                    ? Colors.tealAccent
+                    : Colors.white54,
+              ),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: readStateHeight,
+          child: ChapterReadStatus(store: _readStates, chapter: chapter),
+        ),
+        SizedBox(
+          height: dateHeight,
+          child: Tooltip(
+            message: chapterDateLabel(chapter),
+            child: Text(
+              chapterDateLabel(chapter),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: Colors.white54,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  bool _chapterDescending = false;
+  bool _sortChanging = false;
+
+  final ScrollController _chapterListController = ScrollController();
+
+  String get _sortCacheKey => chapterSortCacheKey(
+    sourceId: widget.adapter.id,
+    language: widget.tab.query.language,
+    workId: widget.work.id,
+  );
+
+  Future<void> _restoreChapterSort() async {
+    final saved = await widget.store.readCache(_sortCacheKey);
+    _chapterDescending = saved is Map && saved['descending'] == true;
+  }
+
+  Future<void> _setChapterDescending(bool descending) async {
+    if (_locked || descending == _chapterDescending) return;
+
+    setState(() => _sortChanging = true);
+
+    try {
+      await widget.store.writeCache(_sortCacheKey, {'descending': descending});
+
+      if (!mounted) return;
+
+      setState(() => _chapterDescending = descending);
+
+      if (_chapterListController.hasClients) {
+        _chapterListController.jumpTo(0);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _status = '並び順を保存できませんでした。\n$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _sortChanging = false);
     }
   }
 
   @override
   void dispose() {
-    _dio.close(force: true);
+    _readingLibrary.removeListener(_syncReadingEntry);
+    _chapterListController.dispose();
     super.dispose();
   }
 
-  Future<void> _initialize() async {
-    setState(() => _busy = true);
-    await _loadLocal();
+  List<ComicChapter> _chapters = [];
+  Set<String> _saved = {};
 
+  bool _busy = true;
+  bool _batch = false;
+  bool _stop = false;
+  String _status = '';
+
+  bool get _locked => _busy || _batch || _sortChanging;
+
+  String get _cacheKey =>
+      '${widget.adapter.id}:chapters:${widget.tab.query.toJson()}:${widget.work.id}';
+
+  bool _matches(ComicChapter chapter) =>
+      chapter.sourceId == widget.adapter.id &&
+      chapter.language == widget.tab.query.language &&
+      chapter.workId == widget.work.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _readingLibrary.addListener(_syncReadingEntry);
+    _loadReadingEntry();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await _restoreChapterSort();
+    if (!mounted) return;
+
+    final entries = <String, ComicChapter>{};
+    final cached = await widget.store.readCache(_cacheKey);
+
+    if (cached is List) {
+      for (final item in cached) {
+        try {
+          final chapter = ComicChapter.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          );
+          if (_matches(chapter)) entries[chapter.id] = chapter;
+        } catch (_) {
+          // 不正な項目だけを無視。
+        }
+      }
+    }
+
+    try {
+      for (final chapter in await widget.store.localChapters(widget.adapter)) {
+        if (_matches(chapter)) {
+          entries.putIfAbsent(chapter.id, () => chapter);
+        }
+      }
+    } catch (_) {
+      // 読める一覧を優先して表示する。
+    }
+
+    if (!mounted) return;
+    _chapters = entries.values.toList()..sort((a, b) => a.id.compareTo(b.id));
+
+    await _checkSaved();
     if (!mounted) return;
     setState(() => _busy = false);
 
-    // 一覧がまだない作品だけ初回取得する。
-    if (_episodes.isEmpty) {
-      await _refresh();
-    }
+    if (cached == null) await _refresh();
   }
 
-  Future<void> _loadLocal() async {
-    final entries = <String, ComicEpisode>{};
-
-    void add(dynamic item) {
-      try {
-        final map = item as Map<String, dynamic>;
-        final episode = ComicEpisode.parse(
-          (map['url'] ?? map['sourceUrl']) as String,
-          map['title'] as String,
-        );
-        if (episode.series.id == _series.id) {
-          entries[episode.id] = episode;
-        }
-      } catch (_) {
-        // 不正な項目だけを無視する。
-      }
-    }
-
-    for (final episode in _episodes) {
-      entries[episode.id] = episode;
-    }
-
-    try {
-      if (await _cache.exists()) {
-        final data = jsonDecode(await _cache.readAsString()) as List<dynamic>;
-        for (final item in data) {
-          add(item);
-        }
-      }
-    } catch (_) {
-      // 保存フォルダからの復元も試す。
-    }
-
-    try {
-      await widget.root.create(recursive: true);
-
-      await for (final entity in widget.root.list(followLinks: false)) {
-        if (entity is! Directory) continue;
-
-        try {
-          final manifest = File(p.join(entity.path, 'manifest.json'));
-          if (!await manifest.exists()) continue;
-
-          final data =
-              jsonDecode(await manifest.readAsString()) as Map<String, dynamic>;
-
-          final episode = ComicEpisode.parse(
-            data['sourceUrl'] as String,
-            data['title'] as String,
-          );
-
-          if (p.basename(entity.path) == episode.id) {
-            add(data);
-          }
-        } catch (_) {
-          // 未完了・破損データは復元に使わない。
-        }
-      }
-    } catch (_) {
-      // 画面自体は表示する。
-    }
-
+  Future<void> _checkSaved() async {
     final saved = <String>{};
 
-    for (final episode in entries.values) {
+    for (final chapter in _chapters) {
       try {
-        if ((await _store(episode).load()).isNotEmpty) {
-          saved.add(episode.id);
+        if ((await widget.store.load(chapter)).isNotEmpty) {
+          saved.add(chapter.id);
         }
       } catch (_) {
-        // 未完了の話は保存済みにしない。
+        // 不完全な話は保存済みにしない。
       }
     }
 
-    final episodes = entries.values.toList()
-      ..sort((a, b) => a.slug.compareTo(b.slug));
-
     if (!mounted) return;
-
     setState(() {
-      _episodes = episodes;
-      _saved
-        ..clear()
-        ..addAll(saved);
-      _status = '${episodes.length}件・${saved.length}件保存済み';
+      _saved = saved;
+      _status = '${_chapters.length}件・${saved.length}件保存済み';
     });
   }
 
   Future<void> _refresh() async {
     if (_locked) return;
-
     setState(() {
       _busy = true;
       _status = 'チャプター一覧を取得中…';
     });
 
     try {
-      final response = await _dio.get<String>(
-        _series.url.toString(),
-        options: Options(responseType: ResponseType.plain),
+      final chapters = await widget.adapter.fetchChapters(
+        widget.work,
+        widget.tab.query,
       );
 
-      final document = html.parse(response.data ?? '');
-      final entries = <String, ComicEpisode>{};
-
-      for (final link in document.querySelectorAll(
-        'figure.thumbnail figcaption a[href]',
-      )) {
-        try {
-          final episode = ComicEpisode.parse(
-            _series.url.resolve(link.attributes['href']!).toString(),
-            link.text,
-          );
-
-          if (episode.series.id == _series.id) {
-            entries[episode.id] = episode;
-          }
-        } catch (_) {
-          // 別カテゴリや特殊リンクは無視する。
-        }
-      }
-
-      if (entries.isEmpty) {
-        throw StateError('チャプターが見つかりません');
-      }
-
-      await widget.root.create(recursive: true);
-      await _cache.writeAsString(
-        jsonEncode(entries.values.map((item) => item.toJson()).toList()),
-        flush: true,
+      await widget.store.writeCache(
+        _cacheKey,
+        chapters.map((item) => item.toJson()).toList(),
       );
 
       if (!mounted) return;
-      _episodes = entries.values.toList();
-      await _loadLocal();
+      _chapters = chapters;
+      await _checkSaved();
     } catch (error) {
       if (!mounted) return;
-
-      setState(() {
-        _status = '一覧を更新できませんでした。\n$error';
-      });
+      setState(() => _status = '一覧更新に失敗しました。\n$error');
     } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<_ComicPageData> _fetchPage(ComicEpisode episode) async {
-    final response = await _dio.get<String>(
-      episode.url.toString(),
-      options: Options(responseType: ResponseType.plain),
-    );
-
-    final document = html.parse(response.data ?? '');
-    final images = <Uri>[];
-    final seen = <String>{};
-
-    for (final image in document.querySelectorAll(
-      '.webcomic-page img, #panel-all img.mft-cv-image',
-    )) {
-      final src = image.attributes['src'];
-      if (src == null || src.isEmpty) continue;
-
-      final url = episode.url.resolve(src);
-
-      if (url.scheme != 'https' ||
-          url.host != 'www.peppercarrot.com' ||
-          !RegExp(
-            r'\.(?:jpe?g|png|webp|gif)$',
-            caseSensitive: false,
-          ).hasMatch(url.path)) {
-        throw const FormatException('未対応の画像URLです');
-      }
-
-      if (seen.add(url.toString())) {
-        images.add(url);
-      }
-    }
-
-    if (images.isEmpty) {
-      throw StateError('本文画像が見つかりません');
-    }
-
-    // 作品ごとのクレジット・ライセンス表示とリンクを保持する。
-    final sections = document.querySelectorAll(
-      '.webcomic-footer-box, .mft-cv-credits',
-    );
-
-    final notes = <String>[
-      episode.title,
-      '出典: ${episode.url}',
-      '本アプリは非公式リーダーです。画像データは変更していません。',
-    ];
-
-    for (final section in sections) {
-      notes.add(section.text.trim());
-      for (final link in section.querySelectorAll('a[href]')) {
-        final href = link.attributes['href'];
-        if (href != null && href.isNotEmpty) {
-          notes.add(episode.url.resolve(href).toString());
-        }
-      }
-    }
-
-    final credits = notes.toSet().join('\n\n');
-    final store = _store(episode);
-    await store.directory.create(recursive: true);
-    await _creditsFile(episode).writeAsString(credits, flush: true);
-
-    return _ComicPageData(images, credits);
-  }
-
-  Future<void> _open(ComicEpisode episode) async {
+  Future<void> _open(ComicChapter chapter) async {
     if (_locked) return;
 
-    setState(() {
-      _workingId = episode.id;
-      _status = '開いています…';
-    });
+    final index = _chapters.indexWhere((item) => item.id == chapter.id);
+
+    if (index < 0) return;
+
+    setState(() => _busy = true);
 
     try {
-      List<File> files = [];
-      try {
-        files = await _store(episode).load();
-      } catch (_) {
-        // 不完全ならオンライン閲覧を試す。
-      }
-
-      final urls = files.isEmpty ? (await _fetchPage(episode)).images : <Uri>[];
-
-      if (!mounted) return;
-
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => ReaderPage(
-            progressKey: ReadingKey(
-              sourceId: episode.url.host,
-              chapterId: episode.url.path,
-            ),
-            files: files,
-            imageUrls: urls,
-            title: episode.title,
+          builder: (_) => ChapterReaderPage(
+            adapter: widget.adapter,
+            store: widget.store,
+            chapters: List<ComicChapter>.unmodifiable(_chapters),
+            initialIndex: index,
+            onChapterOpened: (opened) => UserLibraryStore.forRoot(
+              widget.store.root,
+            ).remember(widget.adapter.id, widget.tab, widget.work, opened),
           ),
         ),
       );
-    } catch (error) {
-      _message('開けませんでした。未保存の話にはネット接続が必要です。\n$error');
     } finally {
-      if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
-      }
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _save(ComicEpisode episode) async {
-    final store = _store(episode);
-
+  Future<void> _save(ComicChapter chapter) async {
     try {
-      if ((await store.load()).isNotEmpty) {
-        if (mounted) {
-          setState(() => _saved.add(episode.id));
-        }
+      if ((await widget.store.load(chapter)).isNotEmpty) {
         return;
       }
     } catch (_) {
-      // 破損・未完了なら再取得。
+      // 不完全な場合は再保存。
     }
 
-    // クレジットを先に保存する。
-    await _fetchPage(episode);
-    await store.directory.create(recursive: true);
+    final content = await widget.adapter.fetchContent(chapter);
 
-    await store.download((done, total) {
+    await widget.store.download(chapter, content, (done, total) {
       if (!mounted) return;
       setState(() {
-        _status = '${episode.title}\n$done / $total ページ保存中';
+        _status = '${chapter.title}\n$done / $total ページ保存中';
       });
     });
-
-    if (mounted) {
-      setState(() => _saved.add(episode.id));
-    }
   }
 
-  Future<void> _download(ComicEpisode episode) async {
+  Future<void> _download(ComicChapter chapter) async {
     if (_locked) return;
-
-    setState(() {
-      _workingId = episode.id;
-      _status = '保存を開始します…';
-    });
+    setState(() => _busy = true);
 
     try {
-      await _save(episode);
-      _message('保存しました');
+      await _save(chapter);
     } catch (error) {
       _message('保存に失敗しました。\n$error');
     } finally {
       if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
+        await _checkSaved();
+        if (mounted) setState(() => _busy = false);
       }
     }
+  }
+
+  Future<bool> _confirm(String title, String message) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(title),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('キャンセル'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('実行'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _downloadAll() async {
     if (_locked) return;
 
-    final targets = _episodes
-        .where((episode) => !_saved.contains(episode.id))
+    final targets = _chapters
+        .where((chapter) => !_saved.contains(chapter.id))
         .toList();
 
     if (targets.isEmpty) {
@@ -610,29 +1190,14 @@ class _CatalogPageState extends State<CatalogPage> {
       return;
     }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('一括ダウンロード'),
-        content: Text(
-          '${_series.title}の未保存${targets.length}件を順番に保存します。\n\n'
-          '通信量と保存容量にご注意ください。\n'
-          '停止操作は現在の話の処理後に反映されます。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('キャンセル'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('開始'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirm(
+      '一括ダウンロード',
+      '${widget.tab.title}の「${widget.work.title}」から、'
+          '未保存${targets.length}件を順番に保存します。\n\n'
+          '通信量と空き容量にご注意ください。',
     );
 
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     setState(() {
       _batch = true;
@@ -642,41 +1207,38 @@ class _CatalogPageState extends State<CatalogPage> {
     var completed = 0;
     final failed = <String>[];
 
-    for (final episode in targets) {
+    for (final chapter in targets) {
       if (!mounted || _stop) break;
 
-      setState(() {
-        _workingId = episode.id;
-        _status =
-            '${completed + failed.length + 1} / '
-            '${targets.length}件目を処理中';
-      });
-
       try {
-        await _save(episode);
+        await _save(chapter);
         completed++;
       } catch (_) {
-        failed.add(episode.title);
+        failed.add(chapter.title);
       }
 
-      if (mounted && !_stop) {
+      if (mounted) {
+        setState(() {
+          _status =
+              '今回保存$completed件・失敗${failed.length}件'
+              '／対象${targets.length}件';
+        });
+      }
+
+      if (!_stop) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
     }
 
     if (!mounted) return;
-
-    await _loadLocal();
+    await _checkSaved();
     if (!mounted) return;
-
-    final stopped = _stop;
 
     setState(() {
       _batch = false;
-      _workingId = null;
       _status =
-          '${stopped ? "停止しました" : "処理が完了しました"}'
-          '：今回保存$completed件・失敗${failed.length}件';
+          '${_stop ? "停止" : "完了"}：'
+          '今回保存$completed件・失敗${failed.length}件';
     });
 
     if (failed.isNotEmpty) {
@@ -696,70 +1258,50 @@ class _CatalogPageState extends State<CatalogPage> {
     }
   }
 
-  Future<void> _delete(ComicEpisode episode) async {
+  Future<void> _delete(ComicChapter chapter) async {
     if (_locked) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('保存データを削除'),
-        content: Text('${episode.title}の保存データを削除しますか？'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('キャンセル'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('削除する'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirm(
+      '保存データを削除',
+      '${chapter.title}の保存画像を削除しますか？\n閲覧位置の記録は残ります。',
     );
 
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _workingId = episode.id);
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
 
     try {
-      final directory = _store(episode).directory;
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
-      _message('削除しました');
+      await widget.store.delete(chapter);
     } catch (error) {
-      _message('削除を完了できませんでした。\n$error');
+      _message('削除できませんでした。\n$error');
     } finally {
       if (mounted) {
-        await _loadLocal();
-        if (mounted) {
-          setState(() => _workingId = null);
-        }
+        await _checkSaved();
+        if (mounted) setState(() => _busy = false);
       }
     }
   }
 
-  Future<void> _showCredits(ComicEpisode episode) async {
+  Future<void> _credits(ComicChapter chapter) async {
     if (_locked) return;
-    setState(() => _workingId = episode.id);
+    setState(() => _busy = true);
 
     String text;
 
     try {
-      final file = _creditsFile(episode);
-      text = await file.exists()
-          ? await file.readAsString()
-          : (await _fetchPage(episode)).credits;
+      final saved = await widget.store.readCredits(chapter);
+      if (saved != null) {
+        text = saved;
+      } else {
+        final content = await widget.adapter.fetchContent(chapter);
+        text = content.credits;
+        await widget.store.rememberCredits(chapter, text);
+      }
     } catch (_) {
-      text =
-          'この話のクレジットを取得できませんでした。\n'
-          'ネット接続後に再度お試しください。\n\n'
-          '出典: ${episode.url}';
+      text = 'クレジットを取得できませんでした。\n出典: ${chapter.url}';
     }
 
     if (!mounted) return;
-
-    setState(() => _workingId = null);
+    setState(() => _busy = false);
 
     await showDialog<void>(
       context: context,
@@ -781,134 +1323,63 @@ class _CatalogPageState extends State<CatalogPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // chapter-list-stable-layout-v1
   @override
   Widget build(BuildContext context) {
-    if (widget.series == null) {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('作品一覧'),
-          actions: [
-            IconButton(
-              tooltip: '作品画像を更新',
-              onPressed: _thumbnailLoading ? null : _loadSeriesThumbnails,
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            if (_thumbnailLoading) const LinearProgressIndicator(),
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: comicSeries.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (context, index) {
-                  final series = comicSeries[index];
-                  final thumbnail = _seriesThumbnails[series.id];
+    final displayedChapters = chapterDisplayOrder(
+      _chapters,
+      descending: _chapterDescending,
+    );
 
-                  return Material(
-                    color: const Color(0xFF151515),
-                    borderRadius: BorderRadius.circular(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                CatalogPage(root: widget.root, series: series),
-                          ),
-                        );
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: SizedBox(
-                                width: 128,
-                                height: 96,
-                                child: thumbnail == null
-                                    ? _thumbnailPlaceholder()
-                                    : Image.network(
-                                        thumbnail,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) {
-                                              return _thumbnailPlaceholder();
-                                            },
-                                        loadingBuilder:
-                                            (context, child, progress) {
-                                              if (progress == null) {
-                                                return child;
-                                              }
+    final textScaler = MediaQuery.textScalerOf(context);
 
-                                              return const ColoredBox(
-                                                color: Color(0xFF252525),
-                                                child: Center(
-                                                  child: SizedBox(
-                                                    width: 22,
-                                                    height: 22,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                        ),
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                      ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    series.title,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'チャプター一覧を開く',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Icon(
-                              Icons.chevron_right,
-                              color: Colors.white54,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+    // 文字サイズの設定に合わせて領域を確保し、
+    // 内容が変化しても高さが変わらないようにする。
+    final statusHeight = textScaler.scale(14) * 1.4 * 2 + 8;
+    final titleHeight = textScaler.scale(16) * 1.3 * 2;
+    final subtitleHeight = textScaler.scale(14) * 1.3;
+    final dateHeight = (textScaler.scale(12) * 1.4).ceilToDouble() + 4;
+
+    final readStateHeight = (textScaler.scale(12) * 1.4).ceilToDouble() + 4;
+
+    final rowHeight =
+        (titleHeight + subtitleHeight + readStateHeight + dateHeight + 24)
+            .ceilToDouble() +
+        8;
 
     return PopScope(
       canPop: !_locked,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_series.title),
+          title: Text('${widget.work.title}・${widget.tab.title}'),
           actions: [
+            PopupMenuButton<bool>(
+              tooltip: _chapterDescending ? '並び順：降順' : '並び順：昇順',
+              enabled: !_locked,
+              initialValue: _chapterDescending,
+              onSelected: _setChapterDescending,
+              icon: Icon(
+                _chapterDescending ? Icons.arrow_downward : Icons.arrow_upward,
+              ),
+              itemBuilder: (_) => [
+                CheckedPopupMenuItem<bool>(
+                  value: false,
+                  checked: !_chapterDescending,
+                  child: const Text('昇順・古い話から'),
+                ),
+                CheckedPopupMenuItem<bool>(
+                  value: true,
+                  checked: _chapterDescending,
+                  child: const Text('降順・新しい話から'),
+                ),
+              ],
+            ),
+            FavoriteWorkButton(
+              library: UserLibraryStore.forRoot(widget.store.root),
+              sourceId: widget.adapter.id,
+              tab: widget.tab,
+              work: widget.work,
+            ),
             IconButton(
               tooltip: 'チャプター一覧を更新',
               onPressed: _locked ? null : _refresh,
@@ -923,101 +1394,166 @@ class _CatalogPageState extends State<CatalogPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(_status, style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 10),
-                  if (_batch)
-                    OutlinedButton.icon(
-                      onPressed: _stop
-                          ? null
-                          : () {
-                              setState(() => _stop = true);
-                            },
-                      icon: const Icon(Icons.stop),
-                      label: Text(_stop ? '現在の話の処理後に停止します' : '一括保存を停止'),
-                    )
-                  else
-                    OutlinedButton.icon(
-                      onPressed: _locked || _episodes.isEmpty
-                          ? null
-                          : _downloadAll,
-                      icon: const Icon(Icons.download_for_offline),
-                      label: const Text('未保存チャプターを一括ダウンロード'),
+                  _readingEntryButton(),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: statusHeight,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Tooltip(
+                        message: _status,
+                        child: Text(
+                          _status,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 14, height: 1.4),
+                        ),
+                      ),
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 48,
+                    child: OutlinedButton.icon(
+                      onPressed: _batch
+                          ? (_stop ? null : () => setState(() => _stop = true))
+                          : (_locked || _chapters.isEmpty
+                                ? null
+                                : _downloadAll),
+                      icon: Icon(
+                        _batch ? Icons.stop : Icons.download_for_offline,
+                      ),
+                      label: Text(
+                        _batch
+                            ? (_stop ? '現在の話の処理後に停止します' : '一括保存を停止')
+                            : '未保存を一括ダウンロード',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            if (_locked) const LinearProgressIndicator(),
-            Expanded(
-              child: _episodes.isEmpty && !_busy
-                  ? const Center(
-                      child: Text(
-                        '一覧がありません。\n右上の更新ボタンで取得してください。',
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _episodes.length,
-                      itemBuilder: (context, index) {
-                        final episode = _episodes[index];
-                        final saved = _saved.contains(episode.id);
 
-                        return ListTile(
-                          leading: Text(
-                            '${index + 1}',
-                            style: const TextStyle(color: Colors.white54),
-                          ),
-                          title: Text(episode.title),
-                          subtitle: Text(
-                            saved ? '保存済み・オフライン閲覧可能' : 'オンラインで読む',
-                            style: TextStyle(
-                              color: saved ? Colors.tealAccent : Colors.white54,
+            // バーを隠している間も、同じ高さを確保する。
+            SizedBox(
+              height: 4,
+              child: _locked
+                  ? const LinearProgressIndicator(minHeight: 4)
+                  : const SizedBox.expand(),
+            ),
+
+            Expanded(
+              child: ListView.builder(
+                controller: _chapterListController,
+                key: PageStorageKey<String>(
+                  'chapters:${widget.adapter.id}:'
+                  '${widget.tab.id}:${widget.work.id}',
+                ),
+                itemExtent: rowHeight,
+                itemCount: displayedChapters.length,
+                itemBuilder: (context, index) {
+                  final chapter = displayedChapters[index];
+                  final saved = _saved.contains(chapter.id);
+
+                  return Material(
+                    key: ValueKey(chapter.id),
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _locked ? null : () => _open(chapter),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _chapterLabels(
+                                chapter,
+                                saved,
+                                titleHeight,
+                                subtitleHeight,
+                                dateHeight,
+                              ),
                             ),
-                          ),
-                          onTap: _locked ? null : () => _open(episode),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (saved)
-                                const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: Icon(
-                                    Icons.offline_pin,
-                                    color: Colors.tealAccent,
+                            const SizedBox(width: 8),
+
+                            // 保存前後で、右側の領域を同じ幅・高さにする。
+                            SizedBox(
+                              width: 96,
+                              height: 48,
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      tooltip: saved ? '保存済み' : 'ダウンロード',
+                                      onPressed: saved || _locked
+                                          ? null
+                                          : () => _download(chapter),
+                                      icon: Icon(
+                                        saved
+                                            ? Icons.offline_pin
+                                            : Icons.download,
+                                        color: saved ? Colors.tealAccent : null,
+                                      ),
+                                    ),
                                   ),
-                                )
-                              else
-                                IconButton(
-                                  tooltip: 'ダウンロード',
-                                  onPressed: _locked
-                                      ? null
-                                      : () => _download(episode),
-                                  icon: const Icon(Icons.download),
-                                ),
-                              PopupMenuButton<String>(
-                                enabled: !_locked,
-                                onSelected: (value) {
-                                  if (value == 'delete') {
-                                    _delete(episode);
-                                  } else {
-                                    _showCredits(episode);
-                                  }
-                                },
-                                itemBuilder: (_) => [
-                                  const PopupMenuItem(
-                                    value: 'credits',
-                                    child: Text('クレジット'),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Text('保存データを削除'),
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: PopupMenuButton<String>(
+                                      enabled: !_locked,
+                                      onSelected: (value) {
+                                        if (value == 'complete') {
+                                          _changeReadState(
+                                            chapter,
+                                            ChapterReadState.completed,
+                                          );
+                                        } else if (value == 'unread') {
+                                          _changeReadState(
+                                            chapter,
+                                            ChapterReadState.unread,
+                                          );
+                                        } else if (value == 'delete') {
+                                          _delete(chapter);
+                                        } else {
+                                          _credits(chapter);
+                                        }
+                                      },
+                                      itemBuilder: (_) => const [
+                                        PopupMenuItem(
+                                          value: 'complete',
+                                          child: Text('読了にする'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'unread',
+                                          child: Text('未読に戻す'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'credits',
+                                          child: Text('クレジット'),
+                                        ),
+                                        PopupMenuItem(
+                                          value: 'delete',
+                                          child: Text('保存データを削除'),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ],
                               ),
-                            ],
-                          ),
-                        );
-                      },
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
+                  );
+                },
+              ),
             ),
           ],
         ),

@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+    <key>NSCameraUsageDescription</key>
+    <string>サイトルールのQRコードを読み取るためにカメラを使用します。</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>作成したサイト設定のQR画像を写真ライブラリに保存するために使用します。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>対応するiOSで、作成したサイト設定のQR画像を写真ライブラリへ保存するために使用します。</string>
 </dict>
 </plist>
