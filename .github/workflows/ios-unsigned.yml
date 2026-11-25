@@ -1,0 +1,156 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/ios-unsigned.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      CI: 'true'
+      COCOAPODS_DISABLE_STATS: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.44.6'
+          cache: true
+
+      - name: Check build environment
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ios-build-logs"
+          {
+            sw_vers
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            flutter --version
+            dart --version
+            ruby --version
+            if ! command -v pod >/dev/null 2>&1; then
+              sudo gem install cocoapods --no-document
+            fi
+            pod --version
+            flutter config --enable-swift-package-manager
+            flutter precache --ios
+          } 2>&1 | tee "$RUNNER_TEMP/ios-build-logs/environment.txt"
+
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile 2>&1 \
+            | tee "$RUNNER_TEMP/ios-build-logs/pub-get.txt"
+
+      - name: Analyze
+        run: |
+          set -euo pipefail
+          flutter analyze --no-pub --no-fatal-infos 2>&1 \
+            | tee "$RUNNER_TEMP/ios-build-logs/analyze.txt"
+
+      - name: Run tests
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          flutter test --no-pub --reporter expanded --timeout 90s 2>&1 \
+            | tee "$RUNNER_TEMP/ios-build-logs/tests.txt"
+
+      - name: Build iOS release without signing
+        run: |
+          set -euo pipefail
+          flutter build ios \
+            --release \
+            --no-codesign \
+            --no-pub \
+            --build-number="$GITHUB_RUN_NUMBER" 2>&1 \
+            | tee "$RUNNER_TEMP/ios-build-logs/ios-build.txt"
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+
+          APP="$GITHUB_WORKSPACE/build/ios/iphoneos/Runner.app"
+          STAGE="$RUNNER_TEMP/unsigned-ipa"
+          OUTPUT="$GITHUB_WORKSPACE/dist"
+
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          /usr/bin/plutil -lint "$APP/Info.plist"
+
+          mkdir -p "$STAGE/Payload" "$OUTPUT"
+          /usr/bin/ditto "$APP" "$STAGE/Payload/Runner.app"
+
+          IPA="$OUTPUT/offline-comic-reader-unsigned.ipa"
+          (
+            cd "$STAGE"
+            /usr/bin/zip -q -r -y "$IPA" Payload
+          )
+
+          /usr/bin/unzip -tq "$IPA"
+          /usr/bin/unzip -l "$IPA" Payload/Runner.app/Info.plist
+
+          (
+            cd "$OUTPUT"
+            /usr/bin/shasum -a 256 \
+              offline-comic-reader-unsigned.ipa > SHA256SUMS.txt
+          )
+
+          {
+            printf 'Commit: %s\n' "$GITHUB_SHA"
+            printf 'Run: %s\n' "$GITHUB_RUN_ID"
+            printf '\n'
+            flutter --version
+            xcodebuild -version
+          } > "$OUTPUT/build-info.txt"
+
+          {
+            echo '## Unsigned IPA'
+            echo ''
+            echo 'Download the ios-unsigned-ipa artifact below.'
+            echo ''
+            echo 'This IPA requires signing before installation on a normal iPhone.'
+            echo 'Build success does not verify features on a physical device.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-unsigned-ipa
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-build-logs
+          path: ${{ runner.temp }}/ios-build-logs/
+          if-no-files-found: warn
+          retention-days: 7
