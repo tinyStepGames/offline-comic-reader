@@ -47,6 +47,7 @@ dependencies:
   file_saver: 0.4.0
   super_clipboard: 0.9.1
   mobile_scanner: 7.5.0
+  image_picker: 1.2.1
 
   # Video playback: stage 1.
   media_kit: 1.2.6
