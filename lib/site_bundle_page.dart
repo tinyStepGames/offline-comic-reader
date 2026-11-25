@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'site_qr_scanner_page.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'services/site_rule_bundle.dart';
@@ -36,6 +36,7 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
   String _status = '';
 
   bool _busy = false;
+  bool _scanning = false;
   CancelToken? _cancel;
 
   bool get _exporting => widget.initialSite != null;
@@ -107,16 +108,37 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
   }
 
   Future<void> _scan() async {
-    if (!_canScan || _busy) return;
+    if (!_canScan || _busy || _scanning) return;
 
-    final result = await Navigator.of(context).push<String>(
-      MaterialPageRoute<String>(builder: (_) => const _SiteQrScanner()),
+    final parentRoute = ModalRoute.of(context);
+    final route = MaterialPageRoute<String>(
+      builder: (_) => const SiteQrScannerPage(),
     );
 
-    if (!mounted || result == null) return;
+    setState(() => _scanning = true);
+    try {
+      final result = await Navigator.of(context).push<String>(route);
 
-    _text.text = result;
-    await _inspect();
+      // 戻り値の通知と、戻るアニメーションの完了は別。
+      // スキャナーの退出完了後に親画面を更新する。
+      await route.completed;
+
+      if (!mounted ||
+          result == null ||
+          parentRoute?.isActive != true ||
+          parentRoute?.isCurrent != true) {
+        return;
+      }
+
+      _text.text = result;
+      await _inspect();
+    } catch (error) {
+      if (mounted && parentRoute?.isCurrent == true) {
+        setState(() => _status = 'QR読み取り画面を開けませんでした：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
   }
 
   Future<void> _inspect() async {
@@ -488,7 +510,7 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
                   ),
                   if (_canScan)
                     OutlinedButton.icon(
-                      onPressed: _busy ? null : _scan,
+                      onPressed: _busy || _scanning ? null : _scan,
                       icon: const Icon(Icons.qr_code_scanner),
                       label: const Text('カメラでQRを読む'),
                     ),
@@ -732,57 +754,4 @@ class _SiteBundlePageState extends State<SiteBundlePage> {
       ),
     );
   }
-}
-
-class _SiteQrScanner extends StatefulWidget {
-  const _SiteQrScanner();
-
-  @override
-  State<_SiteQrScanner> createState() => _SiteQrScannerState();
-}
-
-class _SiteQrScannerState extends State<_SiteQrScanner> {
-  bool _accepted = false;
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('サイト一式のQRを読む')),
-    body: Column(
-      children: [
-        const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text(
-            '「サイト一式のJSON・QR」で作成したQRを写してください。'
-            '読み取りだけでは通信・保存しません。',
-          ),
-        ),
-        Expanded(
-          child: MobileScanner(
-            onDetect: (capture) {
-              if (_accepted) return;
-
-              for (final barcode in capture.barcodes) {
-                final value = barcode.rawValue;
-
-                if (value == null || !value.startsWith(SiteRuleBundle.prefix)) {
-                  continue;
-                }
-
-                _accepted = true;
-
-                // カメライベント中の直接的な画面遷移を避ける。
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) {
-                    Navigator.pop(context, value);
-                  }
-                });
-
-                break;
-              }
-            },
-          ),
-        ),
-      ],
-    ),
-  );
 }
